@@ -55,5 +55,12 @@ check "top-level do: nested do unrolls"  '(do (do (def y374 9)) (inc y374))' '10
 # eval of a top-level (do …) unrolls too (eval treats its arg as a top-level form).
 check "eval top-level do unrolls" '(eval (quote (do (defmacro n374 [] 7) (n374))))' '7'
 
+# Regression test for eval use-after-free bug: eval returns a function,
+# that function is called later. The function's bytecode and captured values
+# must live in rt.load_arena (persistent), not in a temporary arena that gets
+# freed when eval returns.
+check "eval returns callable fn" '((eval (quote (fn [x] (+ x 10)))) 5)' '15'
+check "eval defn then call" '(do (eval (quote (defn add-twenty [x] (+ x 20)))) (add-twenty 5))' '25'
+
 echo "pass=$pass fail=$fail"
 if [[ $fail -gt 0 ]]; then exit 1; fi

@@ -127,7 +127,7 @@ pub fn run(
             return;
         };
         defer stream.close(io);
-        handleConnection(io, gpa, arena, stderr, &rt, &env, &macro_table, &registry, stream) catch |err| {
+        handleConnection(io, gpa, stderr, &rt, &env, &macro_table, &registry, stream) catch |err| {
             try stderr.print("nrepl: connection error: {s}\n", .{@errorName(err)});
             try stderr.flush();
             // Continue to accept the next connection.
@@ -138,7 +138,6 @@ pub fn run(
 fn handleConnection(
     io: std.Io,
     gpa: std.mem.Allocator,
-    persist: std.mem.Allocator,
     stderr: *Writer,
     rt: *Runtime,
     env: *Env,
@@ -187,7 +186,7 @@ fn handleConnection(
                 .registry = registry,
                 .w = conn_writer,
                 .scratch = scratch,
-                .persist = persist,
+                .persist = rt.load_arena.allocator(),
                 .request = request,
                 .op = op,
             };

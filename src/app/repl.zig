@@ -193,7 +193,7 @@ fn runInteractive(
         const line_owned = try arena.dupe(u8, line);
 
         var sink = TermSink{ .stdout = stdout, .stderr = stderr };
-        _ = eval_session.evalSource(rt, env, macro_table, arena, arena, .{
+        _ = eval_session.evalSource(rt, env, macro_table, rt.load_arena.allocator(), arena, .{
             .source = line_owned,
             .source_label = label,
             .stars = stars,
@@ -256,7 +256,7 @@ fn runPiped(
         const line_owned = try arena.dupe(u8, line);
 
         var sink = TermSink{ .stdout = stdout, .stderr = stderr };
-        _ = eval_session.evalSource(rt, env, macro_table, arena, arena, .{
+        _ = eval_session.evalSource(rt, env, macro_table, rt.load_arena.allocator(), arena, .{
             .source = line_owned,
             .source_label = label,
             .stars = stars,
