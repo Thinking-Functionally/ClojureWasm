@@ -23,6 +23,12 @@ assert_eq() {
 
 assert_eq 'max_key'      "$("$BIN" -e '(max-key count [1] [1 2 3] [1 2])')"   '[1 2 3]'
 assert_eq 'min_key'      "$("$BIN" -e '(min-key count [1 2 3] [1] [1 2])')"   '[1]'
+
+# Tie-breaking: when keys are equal, keep the LAST element (matching JVM)
+assert_eq 'max_key_tie'  "$("$BIN" -e '(max-key (fn [x] 1) "a" "b" "c")')"    '"c"'
+assert_eq 'min_key_tie'  "$("$BIN" -e '(min-key (fn [x] 1) "a" "b" "c")')"    '"c"'
+assert_eq 'max_key_tie_count' "$("$BIN" -e '(max-key count [1 2] [3 4] [5 6])')" '[5 6]'
+assert_eq 'min_key_tie_count' "$("$BIN" -e '(min-key count [7 8] [9 0] [1 2])')" '[1 2]'
 assert_eq 'flatten'      "$("$BIN" -e '(into [] (flatten [1 [2 [3 4]] 5]))')" '[1 2 3 4 5]'
 assert_eq 'flatten_flat' "$("$BIN" -e '(into [] (flatten [1 2 3]))')"         '[1 2 3]'
 # flatten returns a SEQ, not a vector (JVM parity, clj-verified)
