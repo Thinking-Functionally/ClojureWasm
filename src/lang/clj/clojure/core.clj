@@ -1286,15 +1286,47 @@
 ;; ----------------------------------------------------------------
 
 ;; `(max-key f & xs)` — the x with the greatest (f x); ties keep the
-;; earlier-seen. `(min-key …)` is the mirror. reduce uses (first xs)
-;; as the seed (≥1 arg required, matching JVM).
+;; last-seen (matching JVM). Cache key values so each element's key
+;; function is called exactly once (JVM parity).
 (def max-key
   (fn* [f & xs]
-    (reduce (fn* [a b] (if (>= (f a) (f b)) a b)) xs)))
+    (if (nil? (next xs))
+      (first xs)
+      (let* [x (first xs)
+             y (first (next xs))
+             kx (f x)
+             ky (f y)
+             init (if (>= ky kx) [y ky] [x kx])
+             more (next (next xs))]
+        (if (nil? more)
+          (first init)
+          (first (reduce (fn* [vkv w]
+                           (let* [v (first vkv)
+                                  kv (first (next vkv))
+                                  kw (f w)]
+                             (if (>= kw kv) [w kw] vkv)))
+                         init
+                         more)))))))
 
 (def min-key
   (fn* [f & xs]
-    (reduce (fn* [a b] (if (<= (f a) (f b)) a b)) xs)))
+    (if (nil? (next xs))
+      (first xs)
+      (let* [x (first xs)
+             y (first (next xs))
+             kx (f x)
+             ky (f y)
+             init (if (<= ky kx) [y ky] [x kx])
+             more (next (next xs))]
+        (if (nil? more)
+          (first init)
+          (first (reduce (fn* [vkv w]
+                           (let* [v (first vkv)
+                                  kv (first (next vkv))
+                                  kw (f w)]
+                             (if (<= kw kv) [w kw] vkv)))
+                         init
+                         more)))))))
 
 ;; `(flatten coll)` — the contents of any nested sequential as a single
 ;; flat SEQUENCE (matches JVM: a lazy seq, not a vector). Non-sequential

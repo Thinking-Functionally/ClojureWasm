@@ -1,0 +1,11 @@
+;; max-key / min-key tie-breaking: JVM returns LAST on equal keys
+(max-key (fn [x] 1) "a" "b" "c")
+(min-key (fn [x] 1) "a" "b" "c")
+(max-key count [1 2] [3 4] [5 6])
+(min-key count [7 8] [9 0] [1 2])
+;; Single element
+(max-key count [1])
+(min-key count [1])
+;; Two elements, tie
+(max-key identity 5 5)
+(min-key identity 3 3)

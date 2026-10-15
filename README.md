@@ -15,6 +15,11 @@
   <a href="./LICENSE"><img src="https://img.shields.io/badge/License-EPL_2.0-blue.svg" alt="License: EPL 2.0" /></a>
 </p>
 
+> [!NOTE]
+> **This is a community-maintained fork.** The [original ClojureWasm project](https://github.com/clojurewasm/ClojureWasm) 
+> is no longer maintained. This fork provides bug fixes and improvements.
+> See [CHANGELOG-TF.md](./CHANGELOG-TF.md) for changes specific to this fork.
+
 > [!IMPORTANT]
 > **ClojureWasm is no longer maintained.** A from-scratch Clojure runtime
 > turned out to be more than one person can sustain, so I am stopping here
