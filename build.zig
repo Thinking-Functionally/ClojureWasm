@@ -174,6 +174,15 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
 
+    // IR Backend tests (Phase 1)
+    const ir_tests = b.addTest(.{ .root_module = exe_mod });
+    ir_tests.root_module.addAnonymousImport("test_codegen", .{
+        .root_source_file = b.path("src/ir/test_codegen.zig"),
+    });
+    const run_ir_tests = b.addRunArtifact(ir_tests);
+    const ir_test_step = b.step("test-ir", "Run IR backend tests");
+    ir_test_step.dependOn(&run_ir_tests.step);
+
     // `zig build lint` — zlinter rule chain (ADR-0003).
     // Runs where zlinter can be fetched from GitHub; the gate skips it on
     // hosts without network reach. Run with `--max-warnings 0` for strict
