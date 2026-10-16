@@ -32,7 +32,7 @@ Execution
 - Multi-block CFG (basic blocks + terminators)
 - Memory-safe (all allocations tracked and freed)
 
-**Supported Node Types** (7 total):
+**Supported Node Types** (9 total):
 1. `constant` → `{:op "const" :result :v0 :value 42}`
 2. `local_ref` → `{:op "var-ref" :result :v1 :var :param0}`
 3. `call_node` → `{:op "call" :result :v2 :fn "builtin/+" :args [:v0 :v1]}`
@@ -40,8 +40,10 @@ Execution
 5. `do_node` → sequential execution
 6. `let_node` → local variable bindings with incremental params extension
 7. `quote_node` → quoted values as constants
+8. `loop_node` → recursion entry point with loop bindings + back-edge support
+9. `recur_node` → tail recursion (emits recur instruction with args)
 
-**Tests**: 4 unit tests (constant, local_ref, if, let)  
+**Tests**: 6 unit tests (constant, local_ref, if, let, loop, recur)  
 **Memory**: Zero leaks, proper resource tracking
 
 ### ✅ Stage 5: Extended Node Support
@@ -202,6 +204,8 @@ Key commits on `experimental/ir-rewrite`:
 - `310c79fc` - quote_node support
 - `e00e4f0e` - IR Compiler wrapper
 - `59bd1c75` - Build system integration
+- `de64bcec` - driver.zig IR execution path (NotImplemented placeholder)
+- `ae4eade5` - loop_node and recur_node support (tail recursion)
 
 ## References
 
