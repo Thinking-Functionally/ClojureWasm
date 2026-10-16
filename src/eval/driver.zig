@@ -93,21 +93,20 @@ pub fn evalForm(
         return vm.eval(rt, env, locals, &chunk);
     } else if (comptime build_options.backend == .ir) {
         // IR backend execution path (experimental/ir-rewrite branch only).
-        // Simplified implementation for POC - handles FnNode only.
+        // Wraps non-FnNode in implicit FnNode, then compiles and executes.
 
-        // For now, only handle FnNode
-        if (node.* != .fn_node) {
-            // Non-FnNode would need wrapping in implicit FnNode
-            return error.NotImplemented;
-        }
-
+        const node_wrapper = @import("backend/node_wrapper.zig");
         const ir_compiler_mod = @import("../ir_compiler.zig");
+
+        // Wrap node in FnNode if needed
+        const wrapped_node = try node_wrapper.wrapInFn(arena, node);
+        const fn_node = wrapped_node.fn_node;
 
         // Compile Node → IR → WASM
         var compiler = ir_compiler_mod.IRCompiler.init(arena);
         defer compiler.deinit();
 
-        const ir_edn = try compiler.compileToIR(node.fn_node);
+        const ir_edn = try compiler.compileToIR(fn_node);
         defer arena.free(ir_edn);
 
         // Compile IR → WASM module
