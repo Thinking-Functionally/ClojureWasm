@@ -64,8 +64,10 @@ pub fn build(b: *std.Build) void {
     // e2e green on vm). `tree_walk` is retained as the differential oracle /
     // reference implementation, selectable via `-Dbackend=tree_walk` (the
     // enum FIELD spelling — `-Dbackend=tree-walk` is rejected by zig build).
-    const Backend = enum { tree_walk, vm };
-    const backend = b.option(Backend, "backend", "Evaluation backend (vm default — production; tree_walk = differential oracle)") orelse .vm;
+    // `ir` is the experimental IR-based backend (SSA + WASM), selectable via
+    // `-Dbackend=ir` (experimental/ir-rewrite branch only).
+    const Backend = enum { tree_walk, vm, ir };
+    const backend = b.option(Backend, "backend", "Evaluation backend (vm default — production; tree_walk = differential oracle; ir = experimental IR/WASM)") orelse .vm;
     build_options.addOption(Backend, "backend", backend);
 
     // `-Dwasm` — the minimal polyglot Wasm FFI surface (ADR-0099 / CFP P1).
