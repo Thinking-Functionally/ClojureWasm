@@ -93,18 +93,56 @@ pub fn evalForm(
         return vm.eval(rt, env, locals, &chunk);
     } else if (comptime build_options.backend == .ir) {
         // IR backend execution path (experimental/ir-rewrite branch only).
-        //
-        // CURRENT STATE: IR backend can compile Node → IR → WASM but cannot execute.
-        //
-        // BLOCKERS for full execution:
-        // 1. Node wrapping: Non-FnNode top-level forms need wrapping in implicit FnNode
-        // 2. Value marshaling: Need bidirectional cljw.Value ↔ zwasm.Value conversion
-        // 3. Builtin imports: WASM module needs runtime builtin functions ("+", "cons", etc.)
-        // 4. Error integration: Runtime errors need to flow through error_catalog
-        // 5. Build flag: zwasm integration requires -Dwasm compile flag
-        //
-        // This stub documents the architecture for future implementation.
-        return error.NotImplemented;
+        // Simplified implementation for POC - handles FnNode only.
+
+        // For now, only handle FnNode
+        if (node.* != .fn_node) {
+            // Non-FnNode would need wrapping in implicit FnNode
+            return error.NotImplemented;
+        }
+
+        const ir_compiler_mod = @import("../ir_compiler.zig");
+
+        // Compile Node → IR → WASM
+        var compiler = ir_compiler_mod.IRCompiler.init(arena);
+        defer compiler.deinit();
+
+        const ir_edn = try compiler.compileToIR(node.fn_node);
+        defer arena.free(ir_edn);
+
+        // Compile IR → WASM module
+        const ir_to_wasm = @import("../ir/ir_to_wasm.zig");
+        var wasm_module = try ir_to_wasm.compile(arena, ir_edn);
+        defer wasm_module.deinit();
+
+        // Generate WASM bytecode
+        const wasm_bytes = try wasm_module.toBytes();
+        defer arena.free(wasm_bytes);
+
+        // For POC: execute via zwasm if -Dwasm is enabled
+        // This requires the wasm feature flag at build time
+        if (@hasDecl(build_options, "wasm")) {
+            const engine_mod = @import("../runtime/cljw/wasm/engine.zig");
+
+            // Load WASM module
+            var loaded = try engine_mod.load(rt.gpa, wasm_bytes, .{});
+            defer {
+                loaded.deinit();
+                rt.gpa.destroy(loaded);
+            }
+
+            // Invoke main function (assumes 0 params, 1 f64 result)
+            var args: [0]engine_mod.Value = undefined;
+            var results: [1]engine_mod.Value = undefined;
+
+            try loaded.invoke("main", &args, &results);
+
+            // Convert zwasm f64 result back to cljw Value
+            return Value.initFloat(results[0].f64);
+        } else {
+            // Without -Dwasm, we can compile but not execute
+            return error.NotImplemented;
+        }
     } else {
         // GC-ROOT: A6 — the TOP-LEVEL locals window on the tree_walk backend
         // (vm.eval pushes its own A1 frame; tree_walk fn activations push per
