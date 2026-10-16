@@ -145,15 +145,18 @@ pub const IRCompiler = struct {
         return switch (node.*) {
             .constant => |n| try self.compileConstant(n),
             .local_ref => |n| try self.compileLocalRef(n, params),
-            .var_ref => return error.UnsupportedNode, // TODO: global vars
+            .var_ref => |n| try self.compileVarRef(n),
             .call_node => |n| try self.compileCall(n, params),
             .if_node => |n| try self.compileIf(n, params),
-            .fn_node => return error.UnsupportedNode, // Nested functions handled separately
+            .fn_node => return error.UnsupportedNode, // Nested functions - complex, requires closure support
             .do_node => |n| try self.compileDo(n, params),
             .let_node => |n| try self.compileLet(n, params),
             .loop_node => |n| try self.compileLoop(n, params),
             .recur_node => |n| try self.compileRecur(n, params),
             .quote_node => |n| try self.compileQuote(n),
+            .set_node => |n| try self.compileSet(n, params),
+            .try_node => |n| try self.compileTry(n, params),
+            .throw_node => |n| try self.compileThrow(n, params),
             else => error.UnsupportedNode,
         };
     }
@@ -452,6 +455,138 @@ pub const IRCompiler = struct {
             self.allocator,
             "{{:op \"recur\" :result {s} :args {s}}}",
             .{ result, args_str.items }
+        );
+        try self.emitInstruction(instr);
+        return result;
+    }
+
+    fn compileVarRef(self: *IRCompiler, n: node_mod.VarRef) ![]const u8 {
+        // Global Var reference - emit var-deref instruction
+        const result = try self.nextValueId();
+        const var_name = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/{s}",
+            .{ n.var_ptr.ns.name, n.var_ptr.name }
+        );
+        defer self.allocator.free(var_name);
+
+        const instr = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"var-deref\" :result {s} :var \"{s}\"}}",
+            .{ result, var_name }
+        );
+        try self.emitInstruction(instr);
+        return result;
+    }
+
+    fn compileSet(self: *IRCompiler, n: node_mod.SetNode, params: []const []const u8) ![]const u8 {
+        // Compile value expression
+        const value_id = try self.compileNode(n.value_expr, params);
+
+        // Emit set instruction for Var mutation
+        const result = try self.nextValueId();
+        const var_name = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/{s}",
+            .{ n.var_ptr.ns.name, n.var_ptr.name }
+        );
+        defer self.allocator.free(var_name);
+
+        const instr = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"set\" :result {s} :var \"{s}\" :value {s}}}",
+            .{ result, var_name, value_id }
+        );
+        try self.emitInstruction(instr);
+        return result;
+    }
+
+    fn compileTry(self: *IRCompiler, n: node_mod.TryNode, params: []const []const u8) ![]const u8 {
+        // Create blocks for try/catch/finally
+        const try_block_id = try self.nextBlockId();
+        const catch_block_id = try self.nextBlockId();
+        const finally_block_id = try self.nextBlockId();
+        const exit_block_id = try self.nextBlockId();
+
+        // Jump to try block
+        const try_jump = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"jump\" :target {s}}}",
+            .{try_block_id}
+        );
+        try self.setTerminator(try_jump);
+
+        // Try block
+        const try_block = try self.createBlock(try_block_id);
+        self.current_block = try_block;
+        const try_val = try self.compileNode(n.body, params);
+
+        // If no exception, jump to finally
+        const try_exit = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"jump\" :target {s} :value {s}}}",
+            .{ finally_block_id, try_val }
+        );
+        try self.setTerminator(try_exit);
+
+        // Catch block (simplified - single catch clause)
+        const catch_block = try self.createBlock(catch_block_id);
+        self.current_block = catch_block;
+
+        const result = try self.nextValueId();
+        const catch_instr = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"catch\" :result {s}}}",
+            .{result}
+        );
+        try self.emitInstruction(catch_instr);
+
+        const catch_exit = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"jump\" :target {s} :value {s}}}",
+            .{ finally_block_id, result }
+        );
+        try self.setTerminator(catch_exit);
+
+        // Finally block
+        const finally_block = try self.createBlock(finally_block_id);
+        self.current_block = finally_block;
+
+        if (n.finally_body) |finally_node| {
+            _ = try self.compileNode(finally_node, params);
+        }
+
+        const finally_exit = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"jump\" :target {s}}}",
+            .{exit_block_id}
+        );
+        try self.setTerminator(finally_exit);
+
+        // Exit block
+        const exit_block = try self.createBlock(exit_block_id);
+        self.current_block = exit_block;
+
+        const final_result = try self.nextValueId();
+        const phi_instr = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"phi\" :result {s} :sources [{{:block {s} :value {s}}}]}}",
+            .{ final_result, try_block_id, try_val }
+        );
+        try self.emitInstruction(phi_instr);
+        return final_result;
+    }
+
+    fn compileThrow(self: *IRCompiler, n: node_mod.ThrowNode, params: []const []const u8) ![]const u8 {
+        // Compile exception value
+        const exception_val = try self.compileNode(n.expr, params);
+
+        // Emit throw instruction
+        const result = try self.nextValueId();
+        const instr = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"throw\" :result {s} :exception {s}}}",
+            .{ result, exception_val }
         );
         try self.emitInstruction(instr);
         return result;

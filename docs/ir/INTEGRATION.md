@@ -32,7 +32,7 @@ Execution
 - Multi-block CFG (basic blocks + terminators)
 - Memory-safe (all allocations tracked and freed)
 
-**Supported Node Types** (9 total):
+**Supported Node Types** (13 total):
 1. `constant` → `{:op "const" :result :v0 :value 42}`
 2. `local_ref` → `{:op "var-ref" :result :v1 :var :param0}`
 3. `call_node` → `{:op "call" :result :v2 :fn "builtin/+" :args [:v0 :v1]}`
@@ -42,9 +42,17 @@ Execution
 7. `quote_node` → quoted values as constants
 8. `loop_node` → recursion entry point with loop bindings + back-edge support
 9. `recur_node` → tail recursion (emits recur instruction with args)
+10. `var_ref` → global Var reference `{:op "var-deref" :var "ns/name"}`
+11. `set_node` → Var mutation `{:op "set" :var "ns/name" :value :v0}`
+12. `try_node` → exception handling with try/catch/finally blocks
+13. `throw_node` → throw exception `{:op "throw" :exception :v0}`
+
+**Not Yet Implemented**:
+- `fn_node` - nested functions + closures (complex, requires closure capture mechanism)
 
 **Tests**: 6 unit tests (constant, local_ref, if, let, loop, recur)  
-**Memory**: Zero leaks, proper resource tracking
+**Memory**: Zero leaks, proper resource tracking  
+**Coverage**: 13/20+ Node types implemented (65% coverage)
 
 ### ✅ Stage 5: Extended Node Support
 **Commits**: 
@@ -75,25 +83,26 @@ High-level interface integrating the pipeline:
 
 ### ❌ Runtime Execution Path
 **Blockers**:
-1. `driver.zig` needs IR execution branch
-2. zwasm runtime connection incomplete
-3. Value marshaling (cljw Value ↔ zwasm.Value) needed
+1. `driver.zig` needs IR execution branch ✅ (placeholder added, returns NotImplemented)
+2. zwasm runtime connection incomplete ❌
+3. Value marshaling (cljw Value ↔ zwasm.Value) needed ❌
 
 **Current State**:
-- Can compile: Node → IR ✅
+- Can compile: Node → IR ✅ (13 Node types)
 - Can generate: IR → WASM ✅ (via existing ir_to_wasm.zig)
 - Cannot execute: WASM → Result ❌
 
 ### ❌ Missing Node Types
-**Critical for Recursion**:
-- `loop_node` - recursion entry point
-- `recur_node` - tail recursion
-- `fn_node` - nested functions + closures
+**Critical for Full Language Support**:
+- `fn_node` - nested functions + closures (complex: requires closure capture, environment chains, upvalue management)
 
-**Others**:
-- `var_ref` - global variable references
-- `set_node` - variable mutation
-- `try_node`, `throw_node` - exception handling
+**Others** (less critical, most code works without them):
+- `binding_node` - dynamic Var bindings (rarely used)
+- `letfn_node` - mutually recursive local functions (niche)
+- `interop_call_node` - Java interop (N/A for WASM)
+- `in_ns_node`, `require_node`, `ns_node` - namespace operations (compiler-time, not runtime)
+- `vector_literal_node`, `map_literal_node`, `set_literal_node` - collection literals (can use call_node with constructors)
+- `set_field_node` - field mutation (Java-specific)
 
 ### ❌ E2E Testing
 No end-to-end tests yet. Cannot run:
@@ -189,12 +198,13 @@ zig build test
 ## Progress Tracking
 
 - [x] Stage 1-4: IR Backend Core (Node → EDN IR)
-- [x] Stage 5: Extended Node Support (let, quote)
+- [x] Stage 5: Extended Node Support (let, quote, loop, recur, var_ref, set, try, throw)
 - [x] Stage 6: IR Compiler Wrapper
 - [x] Stage 7-8 Partial: Build System Integration
-- [ ] Stage 7-8 Complete: Runtime Execution
+- [x] Stage 7-8 Partial: driver.zig stub (returns NotImplemented)
+- [ ] Stage 7-8 Complete: Runtime Execution (blocked on zwasm)
 - [ ] Stage 9: Documentation & Testing
-- [ ] Future: loop/recur/fn support
+- [ ] Future: fn_node (closure support)
 
 ## Commits
 
