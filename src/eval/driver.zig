@@ -91,6 +91,12 @@ pub fn evalForm(
     if (comptime build_options.backend == .vm) {
         const chunk = try vm_compiler.compile(rt, arena, node);
         return vm.eval(rt, env, locals, &chunk);
+    } else if (comptime build_options.backend == .ir) {
+        // IR backend execution path — placeholder until zwasm runtime wired.
+        // For now, IR backend can compile Node → IR → WASM but cannot execute.
+        // Full execution requires zwasm runtime connection (Stage 8).
+        // This is experimental code on experimental/ir-rewrite branch only.
+        return error.NotImplemented;
     } else {
         // GC-ROOT: A6 — the TOP-LEVEL locals window on the tree_walk backend
         // (vm.eval pushes its own A1 frame; tree_walk fn activations push per
