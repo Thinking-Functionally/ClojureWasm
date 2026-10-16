@@ -92,10 +92,18 @@ pub fn evalForm(
         const chunk = try vm_compiler.compile(rt, arena, node);
         return vm.eval(rt, env, locals, &chunk);
     } else if (comptime build_options.backend == .ir) {
-        // IR backend execution path — placeholder until zwasm runtime wired.
-        // For now, IR backend can compile Node → IR → WASM but cannot execute.
-        // Full execution requires zwasm runtime connection (Stage 8).
-        // This is experimental code on experimental/ir-rewrite branch only.
+        // IR backend execution path (experimental/ir-rewrite branch only).
+        //
+        // CURRENT STATE: IR backend can compile Node → IR → WASM but cannot execute.
+        //
+        // BLOCKERS for full execution:
+        // 1. Node wrapping: Non-FnNode top-level forms need wrapping in implicit FnNode
+        // 2. Value marshaling: Need bidirectional cljw.Value ↔ zwasm.Value conversion
+        // 3. Builtin imports: WASM module needs runtime builtin functions ("+", "cons", etc.)
+        // 4. Error integration: Runtime errors need to flow through error_catalog
+        // 5. Build flag: zwasm integration requires -Dwasm compile flag
+        //
+        // This stub documents the architecture for future implementation.
         return error.NotImplemented;
     } else {
         // GC-ROOT: A6 — the TOP-LEVEL locals window on the tree_walk backend

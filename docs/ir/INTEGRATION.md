@@ -82,15 +82,27 @@ High-level interface integrating the pipeline:
 ## Incomplete Work
 
 ### ❌ Runtime Execution Path
-**Blockers**:
-1. `driver.zig` needs IR execution branch ✅ (placeholder added, returns NotImplemented)
-2. zwasm runtime connection incomplete ❌
-3. Value marshaling (cljw Value ↔ zwasm.Value) needed ❌
+**Blockers** (documented in `driver.zig` lines 94-112):
+1. **Node wrapping**: Non-FnNode top-level forms need wrapping in implicit FnNode
+2. **Value marshaling**: Need bidirectional cljw.Value ↔ zwasm.Value conversion
+3. **Builtin imports**: WASM module needs runtime builtin functions (`+`, `cons`, etc.)
+4. **Error integration**: Runtime errors need to flow through error_catalog
+5. **Build flag**: zwasm integration requires `-Dwasm` compile flag
 
 **Current State**:
 - Can compile: Node → IR ✅ (13 Node types)
 - Can generate: IR → WASM ✅ (via existing ir_to_wasm.zig)
-- Cannot execute: WASM → Result ❌
+- Cannot execute: WASM → Result ❌ (returns `error.NotImplemented`)
+
+**Why zwasm connection is blocked**:
+The IR backend generates standalone WASM modules that assume builtin functions 
+(like `+`, `cons`, `map`, etc.) are available as imports. However, cljw's runtime 
+builtins are Zig functions, not WASM exports. Bridging this gap requires:
+- A builtin import table in the generated WASM
+- Runtime function wrappers that marshal cljw Values to/from zwasm Values
+- Integration with the existing cljw function dispatch mechanism
+
+This is a significant integration effort beyond the scope of this experimental branch.
 
 ### ❌ Missing Node Types
 **Critical for Full Language Support**:
