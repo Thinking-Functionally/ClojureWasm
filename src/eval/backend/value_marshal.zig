@@ -35,7 +35,8 @@ pub fn toZwasm(value: Value) MarshalError!ZwasmValue {
 
     // For now, only support f64
     if (value.isNumber()) {
-        return ZwasmValue{ .f64 = value.asFloat() };
+        const f: f64 = value.asFloat();
+        return ZwasmValue{ .f64 = @bitCast(f) };
     }
 
     // TODO: Support other types
@@ -54,7 +55,8 @@ pub fn fromZwasm(zwasm_value: ZwasmValue) MarshalError!Value {
     }
 
     // For now, only support f64
-    return Value.initFloat(zwasm_value.f64);
+    const f: f64 = @bitCast(zwasm_value.f64);
+    return Value.initFloat(f);
 
     // TODO: Support other types
     // - Check for NaN patterns (nil, booleans)
@@ -110,7 +112,8 @@ test "toZwasm: f64 number" {
     const value = Value.initFloat(42.5);
     const zwasm_value = try toZwasm(value);
 
-    try testing.expectEqual(@as(f64, 42.5), zwasm_value.f64);
+    const result_f64: f64 = @bitCast(zwasm_value.f64);
+    try testing.expectEqual(@as(f64, 42.5), result_f64);
 }
 
 test "fromZwasm: f64 number" {
@@ -118,7 +121,8 @@ test "fromZwasm: f64 number" {
         return error.SkipZigTest;
     }
 
-    const zwasm_value = ZwasmValue{ .f64 = 42.5 };
+    const f: f64 = 42.5;
+    const zwasm_value = ZwasmValue{ .f64 = @bitCast(f) };
     const value = try fromZwasm(zwasm_value);
 
     try testing.expectEqual(@as(f64, 42.5), value.asFloat());
@@ -139,7 +143,12 @@ test "toZwasmArray: multiple values" {
     defer testing.allocator.free(zwasm_values);
 
     try testing.expectEqual(@as(usize, 3), zwasm_values.len);
-    try testing.expectEqual(@as(f64, 1.0), zwasm_values[0].f64);
-    try testing.expectEqual(@as(f64, 2.0), zwasm_values[1].f64);
-    try testing.expectEqual(@as(f64, 3.0), zwasm_values[2].f64);
+
+    const f1: f64 = @bitCast(zwasm_values[0].f64);
+    const f2: f64 = @bitCast(zwasm_values[1].f64);
+    const f3: f64 = @bitCast(zwasm_values[2].f64);
+
+    try testing.expectEqual(@as(f64, 1.0), f1);
+    try testing.expectEqual(@as(f64, 2.0), f2);
+    try testing.expectEqual(@as(f64, 3.0), f3);
 }

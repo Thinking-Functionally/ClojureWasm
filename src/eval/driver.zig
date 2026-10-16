@@ -137,7 +137,8 @@ pub fn evalForm(
             try loaded.invoke("main", &args, &results);
 
             // Convert zwasm f64 result back to cljw Value
-            return Value.initFloat(results[0].f64);
+            const f: f64 = @bitCast(results[0].f64);
+            return Value.initFloat(f);
         } else {
             // Without -Dwasm, we can compile but not execute
             return error.NotImplemented;
