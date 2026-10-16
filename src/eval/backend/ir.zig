@@ -150,6 +150,7 @@ pub const IRCompiler = struct {
             .if_node => |n| try self.compileIf(n, params),
             .fn_node => return error.UnsupportedNode, // Nested functions handled separately
             .do_node => |n| try self.compileDo(n, params),
+            .let_node => |n| try self.compileLet(n, params),
             else => error.UnsupportedNode,
         };
     }
@@ -289,6 +290,45 @@ pub const IRCompiler = struct {
             last_val = try self.compileNode(&form, params);
         }
         return last_val;
+    }
+
+    fn compileLet(self: *IRCompiler, n: node_mod.LetNode, params: []const []const u8) ![]const u8 {
+        // Create extended params list including let bindings
+        const new_params_len = params.len + n.bindings.len;
+        var new_params = try self.allocator.alloc([]const u8, new_params_len);
+        defer {
+            // Free the local_id strings we allocated
+            for (new_params[params.len..]) |local_id| {
+                self.allocator.free(local_id);
+            }
+            self.allocator.free(new_params);
+        }
+
+        // Copy original params
+        @memcpy(new_params[0..params.len], params);
+
+        // Compile each binding and add to params
+        for (n.bindings, 0..) |binding, i| {
+            const binding_val = try self.compileNode(binding.value_expr, new_params[0..params.len + i]);
+
+            // Create local binding instruction
+            const local_id = try std.fmt.allocPrint(
+                self.allocator,
+                ":local{d}",
+                .{binding.index}
+            );
+            new_params[params.len + i] = local_id;
+
+            const bind_instr = try std.fmt.allocPrint(
+                self.allocator,
+                "{{:op \"bind\" :local {s} :value {s}}}",
+                .{ local_id, binding_val }
+            );
+            try self.emitInstruction(bind_instr);
+        }
+
+        // Compile body with extended params
+        return try self.compileNode(n.body, new_params);
     }
 
     fn getFunctionName(self: *IRCompiler, callee: *const Node, params: []const []const u8) ![]const u8 {
@@ -467,4 +507,38 @@ test "IR Backend: compile if expression" {
     try testing.expect(std.mem.indexOf(u8, ir, "\"branch\"") != null);
     try testing.expect(std.mem.indexOf(u8, ir, "\"phi\"") != null);
     try testing.expect(std.mem.indexOf(u8, ir, ":block") != null);
+}
+
+test "IR Backend: compile let expression" {
+    const testing = std.testing;
+
+    // (let [x 42] x) - bind 42 to x, then return x
+    const binding_val = Node{ .constant = .{ .value = Value.initFloat(42) } };
+    const body = Node{ .local_ref = .{ .name = "x", .index = 0 } };
+
+    const bindings = [_]node_mod.LetNode.Binding{.{
+        .name = "x",
+        .index = 0,
+        .value_expr = &binding_val,
+    }};
+
+    const let_node = Node{ .let_node = .{
+        .bindings = &bindings,
+        .body = &body,
+    } };
+
+    const fn_node = node_mod.FnNode{
+        .methods = &[_]node_mod.FnMethod{.{
+            .arity = 0,
+            .params = &[_][]const u8{},
+            .body = &let_node,
+        }},
+    };
+
+    const ir = try compileFunctionToIR(testing.allocator, fn_node);
+    defer testing.allocator.free(ir);
+
+    try testing.expect(std.mem.indexOf(u8, ir, "\"bind\"") != null);
+    try testing.expect(std.mem.indexOf(u8, ir, ":local0") != null);
+    try testing.expect(std.mem.indexOf(u8, ir, "42") != null);
 }
