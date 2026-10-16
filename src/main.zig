@@ -141,6 +141,7 @@ test {
     _ = @import("eval/backend/vm.zig");
     _ = @import("eval/backend/intrinsic.zig");
     _ = @import("eval/backend/ir.zig");
+    _ = @import("ir_compiler.zig");
     _ = @import("eval/driver.zig");
     _ = @import("eval/evaluator.zig");
     _ = @import("lang/diff_test.zig");
