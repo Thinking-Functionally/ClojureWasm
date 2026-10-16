@@ -55,7 +55,7 @@ pub const IRCompiler = struct {
 
 // Tests
 const testing = std.testing;
-const Value = @import("runtime/value/value.zig");
+const Value = @import("runtime/value/value.zig").Value;
 const Node = node_mod.Node;
 
 test "IRCompiler: compile simple constant" {

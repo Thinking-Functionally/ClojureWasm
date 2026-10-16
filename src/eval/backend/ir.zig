@@ -151,6 +151,8 @@ pub const IRCompiler = struct {
             .fn_node => return error.UnsupportedNode, // Nested functions handled separately
             .do_node => |n| try self.compileDo(n, params),
             .let_node => |n| try self.compileLet(n, params),
+            .loop_node => |n| try self.compileLoop(n, params),
+            .recur_node => |n| try self.compileRecur(n, params),
             .quote_node => |n| try self.compileQuote(n),
             else => error.UnsupportedNode,
         };
@@ -343,6 +345,113 @@ pub const IRCompiler = struct {
             self.allocator,
             "{{:op \"const\" :result {s} :value {s}}}",
             .{ result, value_str }
+        );
+        try self.emitInstruction(instr);
+        return result;
+    }
+
+    fn compileLoop(self: *IRCompiler, n: node_mod.LoopNode, params: []const []const u8) ![]const u8 {
+        // Create extended params list including loop bindings
+        const new_params_len = params.len + n.bindings.len;
+        var new_params = try self.allocator.alloc([]const u8, new_params_len);
+        defer {
+            // Free the local_id strings we allocated
+            for (new_params[params.len..]) |local_id| {
+                self.allocator.free(local_id);
+            }
+            self.allocator.free(new_params);
+        }
+
+        // Copy original params
+        @memcpy(new_params[0..params.len], params);
+
+        // Create loop entry block
+        const loop_entry_id = try self.nextBlockId();
+        const loop_exit_id = try self.nextBlockId();
+
+        // Compile bindings in current block
+        for (n.bindings, 0..) |binding, i| {
+            const binding_val = try self.compileNode(binding.value_expr, new_params[0..params.len + i]);
+
+            const local_id = try std.fmt.allocPrint(
+                self.allocator,
+                ":loop{d}",
+                .{binding.index}
+            );
+            new_params[params.len + i] = local_id;
+
+            const bind_instr = try std.fmt.allocPrint(
+                self.allocator,
+                "{{:op \"bind\" :local {s} :value {s}}}",
+                .{ local_id, binding_val }
+            );
+            try self.emitInstruction(bind_instr);
+        }
+
+        // Jump to loop entry
+        const entry_jump = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"jump\" :target {s}}}",
+            .{loop_entry_id}
+        );
+        try self.setTerminator(entry_jump);
+
+        // Create loop entry block
+        const loop_block = try self.createBlock(loop_entry_id);
+        self.current_block = loop_block;
+
+        // Compile loop body with extended params
+        const body_val = try self.compileNode(n.body, new_params);
+
+        // Normal exit: jump to exit block with result
+        const exit_jump = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"jump\" :target {s} :value {s}}}",
+            .{ loop_exit_id, body_val }
+        );
+        try self.setTerminator(exit_jump);
+
+        // Create exit block
+        const exit_block = try self.createBlock(loop_exit_id);
+        self.current_block = exit_block;
+
+        const result = try self.nextValueId();
+        const phi_instr = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"phi\" :result {s} :sources [{{:block {s} :value {s}}}]}}",
+            .{ result, loop_entry_id, body_val }
+        );
+        try self.emitInstruction(phi_instr);
+
+        return result;
+    }
+
+    fn compileRecur(self: *IRCompiler, n: node_mod.RecurNode, params: []const []const u8) ![]const u8 {
+        // Compile all recur arguments
+        var arg_vals: std.ArrayList([]const u8) = .empty;
+        defer arg_vals.deinit(self.allocator);
+
+        for (n.args) |arg| {
+            const arg_val = try self.compileNode(&arg, params);
+            try arg_vals.append(self.allocator, arg_val);
+        }
+
+        // Build args list string
+        var args_str: std.ArrayList(u8) = .empty;
+        defer args_str.deinit(self.allocator);
+        try args_str.appendSlice(self.allocator, "[");
+        for (arg_vals.items, 0..) |arg, i| {
+            if (i > 0) try args_str.appendSlice(self.allocator, " ");
+            try args_str.appendSlice(self.allocator, arg);
+        }
+        try args_str.appendSlice(self.allocator, "]");
+
+        // Emit recur instruction (signals loop back-edge)
+        const result = try self.nextValueId();
+        const instr = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"recur\" :result {s} :args {s}}}",
+            .{ result, args_str.items }
         );
         try self.emitInstruction(instr);
         return result;
