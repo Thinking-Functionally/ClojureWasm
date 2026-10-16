@@ -151,6 +151,7 @@ pub const IRCompiler = struct {
             .fn_node => return error.UnsupportedNode, // Nested functions handled separately
             .do_node => |n| try self.compileDo(n, params),
             .let_node => |n| try self.compileLet(n, params),
+            .quote_node => |n| try self.compileQuote(n),
             else => error.UnsupportedNode,
         };
     }
@@ -329,6 +330,22 @@ pub const IRCompiler = struct {
 
         // Compile body with extended params
         return try self.compileNode(n.body, new_params);
+    }
+
+    fn compileQuote(self: *IRCompiler, n: node_mod.QuoteNode) ![]const u8 {
+        // QuoteNode already has the quoted value reified by the analyzer
+        // Just emit it as a constant
+        const result = try self.nextValueId();
+        const value_str = try self.valueToString(n.quoted);
+        defer self.allocator.free(value_str);
+
+        const instr = try std.fmt.allocPrint(
+            self.allocator,
+            "{{:op \"const\" :result {s} :value {s}}}",
+            .{ result, value_str }
+        );
+        try self.emitInstruction(instr);
+        return result;
     }
 
     fn getFunctionName(self: *IRCompiler, callee: *const Node, params: []const []const u8) ![]const u8 {
