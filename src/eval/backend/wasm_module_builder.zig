@@ -14,9 +14,12 @@
 const std = @import("std");
 const opcode_mod = @import("vm/opcode.zig");
 const Value = @import("../../runtime/value/value.zig").Value;
+const control_flow = @import("wasm_control_flow.zig");
 
 const Opcode = opcode_mod.Opcode;
 const BytecodeChunk = opcode_mod.BytecodeChunk;
+const ControlFlowAnalysis = control_flow.ControlFlowAnalysis;
+const BlockStack = control_flow.BlockStack;
 
 pub const BuildError = error{
     UnsupportedOpcode,
