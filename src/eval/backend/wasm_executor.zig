@@ -8,33 +8,39 @@ const std = @import("std");
 const opcode_mod = @import("vm/opcode.zig");
 const Value = @import("../../runtime/value/value.zig").Value;
 const wasm_module_builder = @import("wasm_module_builder.zig");
-
-// TODO: Import zwasm API
-// const zwasm = @import("zwasm");
+const builtin = @import("builtin");
 
 const BytecodeChunk = opcode_mod.BytecodeChunk;
+
+// Compile-time check: zwasm is only available with -Dwasm flag
+const build_options = @import("build_options");
+const has_wasm = build_options.wasm;
+
+// Import zwasm only when available (compile-time conditional)
+const wasm_engine = if (has_wasm) @import("../../runtime/cljw/wasm/engine.zig") else struct {
+    pub const Loaded = void;
+    pub const Value = void;
+};
 
 pub const ExecuteError = error{
     WasmModuleBuildFailed,
     WasmLoadFailed,
     WasmExecutionFailed,
     ResultConversionFailed,
+    ZwasmNotAvailable,
 } || std.mem.Allocator.Error;
 
 /// Wasm 執行器
 pub const WasmExecutor = struct {
     allocator: std.mem.Allocator,
-    // zwasm_engine: zwasm.Engine,  // TODO: zwasm v2.5.0 Engine
 
     pub fn init(allocator: std.mem.Allocator) !WasmExecutor {
         return .{
             .allocator = allocator,
-            // .zwasm_engine = try zwasm.Engine.init(allocator),  // TODO
         };
     }
 
     pub fn deinit(self: *WasmExecutor) void {
-        // self.zwasm_engine.deinit();  // TODO
         _ = self;
     }
 
@@ -43,6 +49,10 @@ pub const WasmExecutor = struct {
         self: *WasmExecutor,
         chunk: BytecodeChunk,
     ) ExecuteError!Value {
+        if (!has_wasm) {
+            return ExecuteError.ZwasmNotAvailable;
+        }
+
         // Step 1: 生成 Wasm 模組字節碼
         const wasm_bytes = wasm_module_builder.buildWasmModule(self.allocator, chunk) catch {
             return ExecuteError.WasmModuleBuildFailed;
@@ -50,20 +60,21 @@ pub const WasmExecutor = struct {
         defer self.allocator.free(wasm_bytes);
 
         // Step 2: 載入到 zwasm Engine
-        // TODO: 用 zwasm.Module.parse + zwasm.Instance.create
-        // const module = try zwasm.Module.parse(&self.zwasm_engine, wasm_bytes);
-        // defer module.deinit();
+        var loaded = wasm_engine.load(self.allocator, wasm_bytes, .{}) catch {
+            return ExecuteError.WasmLoadFailed;
+        };
+        defer loaded.deinit();
 
         // Step 3: 執行 "main" 函數
-        // TODO: instance.call("main", &[_]zwasm.Value{})
-        // const result = try instance.call("main", &[_]zwasm.Value{});
+        var results: [1]wasm_engine.Value = undefined;
+        loaded.invoke("main", &[_]wasm_engine.Value{}, &results) catch {
+            return ExecuteError.WasmExecutionFailed;
+        };
 
         // Step 4: zwasm 結果轉換為 cljw Value
-        // TODO: zwasm.Value (f64) → cljw Value.initFloat
-        // return Value.initFloat(result.asF64());
-
-        // Placeholder: 暫時返回 nil
-        return Value.nil();
+        const result_f64 = results[0].f64;
+        const result_i64: i64 = @intFromFloat(result_f64);
+        return Value.initInteger(result_i64);
     }
 };
 

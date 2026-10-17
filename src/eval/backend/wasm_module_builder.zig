@@ -59,8 +59,14 @@ pub const WasmModuleBuilder = struct {
         // Type section: 定義函數簽名 [] -> [f64]
         try self.writeTypeSection(&module);
 
+        // Import section: builtin functions (Tier 2)
+        try self.writeImportSection(&module, chunk);
+
         // Function section: 函數使用嘅類型
         try self.writeFunctionSection(&module);
+
+        // Table section: function table for indirect calls (Tier 2)
+        try self.writeTableSection(&module);
 
         // Export section: 導出 "main" 函數
         try self.writeExportSection(&module);
@@ -71,6 +77,57 @@ pub const WasmModuleBuilder = struct {
         return try module.toOwnedSlice();
     }
 
+    fn writeImportSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8), chunk: BytecodeChunk) !void {
+        // Section ID 2 (import)
+        // 簡化實現：導入一個 "env.print" 函數 (f64) → ()
+        _ = chunk;
+
+        try module.append(0x02);
+
+        var payload = std.ArrayList(u8).init(module.allocator);
+        defer payload.deinit();
+
+        // 1 個 import
+        try self.writeLEB128(&payload, 1);
+
+        // module name: "env"
+        try self.writeLEB128(&payload, 3);
+        try payload.appendSlice("env");
+
+        // field name: "print"
+        try self.writeLEB128(&payload, 5);
+        try payload.appendSlice("print");
+
+        // import kind: function (0x00)
+        try payload.append(0x00);
+        // type index: 1 (需要添加到 type section)
+        try self.writeLEB128(&payload, 1);
+
+        try self.writeLEB128(module, @intCast(payload.items.len));
+        try module.appendSlice(payload.items);
+    }
+
+    fn writeTableSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8)) !void {
+        // Section ID 4 (table)
+        try module.append(0x04);
+
+        var payload = std.ArrayList(u8).init(module.allocator);
+        defer payload.deinit();
+
+        // 1 個 table
+        try self.writeLEB128(&payload, 1);
+
+        // element type: funcref (0x70)
+        try payload.append(0x70);
+
+        // limits: min=16, max=none
+        try payload.append(0x00); // flags: no maximum
+        try self.writeLEB128(&payload, 16);
+
+        try self.writeLEB128(module, @intCast(payload.items.len));
+        try module.appendSlice(payload.items);
+    }
+
     fn writeTypeSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8)) !void {
         // Section ID 1 (type)
         try module.append(0x01);
@@ -79,16 +136,24 @@ pub const WasmModuleBuilder = struct {
         var payload = std.ArrayList(u8).init(module.allocator);
         defer payload.deinit();
 
-        // 1 個類型
-        try self.writeLEB128(&payload, 1);
+        // 2 個類型
+        try self.writeLEB128(&payload, 2);
 
-        // func type
+        // Type 0: main 函數 [] -> [f64]
         try payload.append(0x60);
         // 0 個參數
         try self.writeLEB128(&payload, 0);
         // 1 個返回值 (f64)
         try self.writeLEB128(&payload, 1);
         try payload.append(0x7C); // f64
+
+        // Type 1: print 函數 [f64] -> []
+        try payload.append(0x60);
+        // 1 個參數 (f64)
+        try self.writeLEB128(&payload, 1);
+        try payload.append(0x7C); // f64
+        // 0 個返回值
+        try self.writeLEB128(&payload, 0);
 
         // 寫入 payload 長度同內容
         try self.writeLEB128(module, @intCast(payload.items.len));
@@ -161,10 +226,13 @@ pub const WasmModuleBuilder = struct {
             try self.writeLEB128(&func_body, 0); // 0 組 locals
         }
 
-        // 翻譯指令
-        for (chunk.instructions) |instr| {
-            try self.translateInstruction(&func_body, chunk, instr);
-        }
+        // 第一遍：控制流分析
+        var cf_analysis = ControlFlowAnalysis.init(self.allocator);
+        defer cf_analysis.deinit();
+        try cf_analysis.analyze(chunk);
+
+        // 第二遍：翻譯指令 (帶控制流結構)
+        try self.translateWithControlFlow(&func_body, chunk, &cf_analysis);
 
         // end
         try func_body.append(0x0B);
@@ -176,6 +244,89 @@ pub const WasmModuleBuilder = struct {
         // 寫入 section 長度同內容
         try self.writeLEB128(module, @intCast(section_payload.items.len));
         try module.appendSlice(section_payload.items);
+    }
+
+    /// 帶控制流結構嘅指令翻譯
+    fn translateWithControlFlow(
+        self: *WasmModuleBuilder,
+        code: *std.ArrayList(u8),
+        chunk: BytecodeChunk,
+        cf_analysis: *ControlFlowAnalysis,
+    ) !void {
+        var block_stack = BlockStack.init(self.allocator);
+        defer block_stack.deinit();
+
+        // IP → label 映射 (第二遍分配 label)
+        var ip_to_label = std.AutoHashMap(usize, u32).init(self.allocator);
+        defer ip_to_label.deinit();
+
+        // 檢查係咪有 recur (需要外層 loop)
+        const has_recur = cf_analysis.loop_starts.count() > 0;
+        if (has_recur) {
+            // loop (result type 同 func 一致: [] → [f64])
+            try code.append(0x03); // loop
+            try code.append(0x7C); // result type: f64
+            const loop_label = try block_stack.push(.loop, 0);
+            try ip_to_label.put(0, loop_label);
+        }
+
+        for (chunk.instructions, 0..) |instr, ip| {
+            // 檢查當前 IP 係咪跳轉目標 → 插入 block
+            if (cf_analysis.jump_targets.contains(ip)) {
+                // block (result type: [] → [])
+                try code.append(0x02); // block
+                try code.append(0x40); // void
+                const label = try block_stack.push(.block, ip);
+                try ip_to_label.put(ip, label);
+            }
+
+            // 翻譯指令
+            switch (instr.op) {
+                .op_jump => {
+                    // 計算目標 IP
+                    const target_ip = try cf_analysis.computeJumpTarget(ip, instr.operand);
+                    // 揾目標 block label
+                    const target_label = ip_to_label.get(target_ip) orelse return BuildError.UnsupportedOpcode;
+                    // br <depth>
+                    const depth = block_stack.computeBranchDepth(target_label) orelse return BuildError.UnsupportedOpcode;
+                    try code.append(0x0C); // br
+                    try self.writeLEB128(code, depth);
+                },
+                .op_jump_if_false => {
+                    // stack: [cond] → []
+                    // if cond == 0, jump to target
+                    const target_ip = try cf_analysis.computeJumpTarget(ip, instr.operand);
+                    const target_label = ip_to_label.get(target_ip) orelse return BuildError.UnsupportedOpcode;
+                    const depth = block_stack.computeBranchDepth(target_label) orelse return BuildError.UnsupportedOpcode;
+
+                    // i32.eqz (f64 → i32 cast + eqz)
+                    try code.append(0xB2); // i32.trunc_f64_s
+                    try code.append(0x45); // i32.eqz
+                    // br_if <depth>
+                    try code.append(0x0D); // br_if
+                    try self.writeLEB128(code, depth);
+                },
+                .op_recur => {
+                    // recur 跳到最近嘅 loop 開始
+                    const loop_label = block_stack.findNearestLoop() orelse return BuildError.UnsupportedOpcode;
+                    const depth = block_stack.computeBranchDepth(loop_label) orelse return BuildError.UnsupportedOpcode;
+                    try code.append(0x0C); // br (跳到 loop 開始)
+                    try self.writeLEB128(code, depth);
+                },
+                else => {
+                    // 普通指令
+                    try self.translateInstruction(code, chunk, instr);
+                },
+            }
+
+            // 檢查係咪需要關閉 block (簡化：喺下一個跳轉目標前關閉)
+            // TODO: 正確實現需要追蹤 block 生命週期
+        }
+
+        // 關閉所有未關閉嘅 block
+        while (block_stack.pop()) |_| {
+            try code.append(0x0B); // end
+        }
     }
 
     fn scanLocals(_: *WasmModuleBuilder, chunk: BytecodeChunk) !u32 {
@@ -262,13 +413,21 @@ pub const WasmModuleBuilder = struct {
             // Tier 2: Function calls
             .op_call => {
                 // call_indirect with function table
-                // TODO: 需要 function table 管理
-                return BuildError.UnsupportedOpcode;
+                // operand = arity (arg count)
+                const arity = @as(u32, instr.operand);
+                // 簡化：table index 喺 stack 頂 — [arg0, arg1, ..., fn_idx]
+                // call_indirect $type_idx $table_idx
+                try code.append(0x11); // call_indirect
+                try self.writeLEB128(code, 0); // type index 0 (假設單一類型)
+                try self.writeLEB128(code, 0); // table index 0
+                _ = arity; // TODO: 根據 arity 調整 type index
             },
             .op_invoke_builtin => {
-                // Import builtin functions
-                // TODO: 需要 import section
-                return BuildError.UnsupportedOpcode;
+                // Import builtin functions: call imported function
+                // operand = builtin index (假設 0 = 我哋導入嘅 "env.print")
+                const builtin_idx = @as(u32, instr.operand);
+                try code.append(0x10); // call
+                try self.writeLEB128(code, builtin_idx); // function index (import 0)
             },
 
             else => {
