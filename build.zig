@@ -163,26 +163,6 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
-    // cljw-ir — Standalone IR compiler tool (Phase 1)
-    // Compiles .clj sources to IR EDN without requiring bootstrap.
-    // Shares infrastructure with cljw via module imports.
-    const ir_mod = b.createModule(.{
-        .root_source_file = b.path("src/cljw_ir.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = optimize != .Debug and !profile,
-        .unwind_tables = if (optimize != .Debug and !profile) .none else null,
-    });
-    ir_mod.addOptions("build_options", build_options);
-    // Shared infrastructure: main.zig's modules are available to cljw_ir
-    ir_mod.addImport("main", exe_mod);
-    if (zwasm_mod) |zm| ir_mod.addImport("zwasm", zm);
-    const ir_exe = b.addExecutable(.{
-        .name = "cljw-ir",
-        .root_module = ir_mod,
-    });
-    b.installArtifact(ir_exe);
-
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);
@@ -193,15 +173,6 @@ pub fn build(b: *std.Build) void {
     const run_exe_tests = b.addRunArtifact(exe_tests);
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
-
-    // IR Backend tests (Phase 1)
-    const ir_tests = b.addTest(.{ .root_module = exe_mod });
-    ir_tests.root_module.addAnonymousImport("test_codegen", .{
-        .root_source_file = b.path("src/ir/test_codegen.zig"),
-    });
-    const run_ir_tests = b.addRunArtifact(ir_tests);
-    const ir_test_step = b.step("test-ir", "Run IR backend tests");
-    ir_test_step.dependOn(&run_ir_tests.step);
 
     // `zig build lint` — zlinter rule chain (ADR-0003).
     // Runs where zlinter can be fetched from GitHub; the gate skips it on

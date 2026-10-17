@@ -151,6 +151,7 @@ test {
     _ = @import("eval/backend/bytecode_to_wasm.zig");
     _ = @import("eval/backend/wasm_module_builder.zig");
     _ = @import("eval/backend/wasm_control_flow.zig");
+    _ = @import("eval/backend/wasm_executor.zig");
     _ = @import("lang/primitive/error.zig");
     _ = @import("lang/primitive/transient.zig");
     _ = @import("lang/primitive/edn.zig");

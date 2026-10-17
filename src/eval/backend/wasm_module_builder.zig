@@ -241,6 +241,36 @@ pub const WasmModuleBuilder = struct {
                 // f64.mul
                 try code.append(0xA2);
             },
+
+            // Tier 1: Control flow
+            .op_jump => {
+                // 實現為 br (unconditional branch)
+                // TODO: 需要 control flow analysis 計算正確嘅 label depth
+                return BuildError.UnsupportedOpcode;
+            },
+            .op_jump_if_false => {
+                // 實現為 if + br_if
+                // TODO: 需要 control flow analysis
+                return BuildError.UnsupportedOpcode;
+            },
+            .op_recur => {
+                // 實現為 br (跳到最近嘅 loop)
+                // TODO: 需要 control flow analysis
+                return BuildError.UnsupportedOpcode;
+            },
+
+            // Tier 2: Function calls
+            .op_call => {
+                // call_indirect with function table
+                // TODO: 需要 function table 管理
+                return BuildError.UnsupportedOpcode;
+            },
+            .op_invoke_builtin => {
+                // Import builtin functions
+                // TODO: 需要 import section
+                return BuildError.UnsupportedOpcode;
+            },
+
             else => {
                 return BuildError.UnsupportedOpcode;
             },

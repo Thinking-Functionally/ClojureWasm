@@ -363,9 +363,9 @@ fn translateInstruction(
 
         // ===== 超指令 (local+const 融合) =====
         .op_add_local_const => {
-            const packed = instr.operand;
-            const local_slot = (packed >> 8) & 0xFF;
-            const const_idx = packed & 0xFF;
+            const packed_operand = instr.operand;
+            const local_slot = (packed_operand >> 8) & 0xFF;
+            const const_idx = packed_operand & 0xFF;
             try module.emitLocalGet(local_slot);
             const val = chunk.constants[const_idx];
             if (val.asInteger()) |i| {
@@ -376,9 +376,9 @@ fn translateInstruction(
             try module.emit(.f64_add);
         },
         .op_sub_local_const => {
-            const packed = instr.operand;
-            const local_slot = (packed >> 8) & 0xFF;
-            const const_idx = packed & 0xFF;
+            const packed_operand = instr.operand;
+            const local_slot = (packed_operand >> 8) & 0xFF;
+            const const_idx = packed_operand & 0xFF;
             try module.emitLocalGet(local_slot);
             const val = chunk.constants[const_idx];
             if (val.asInteger()) |i| {
@@ -389,9 +389,9 @@ fn translateInstruction(
             try module.emit(.f64_sub);
         },
         .op_mul_local_const => {
-            const packed = instr.operand;
-            const local_slot = (packed >> 8) & 0xFF;
-            const const_idx = packed & 0xFF;
+            const packed_operand = instr.operand;
+            const local_slot = (packed_operand >> 8) & 0xFF;
+            const const_idx = packed_operand & 0xFF;
             try module.emitLocalGet(local_slot);
             const val = chunk.constants[const_idx];
             if (val.asInteger()) |i| {
@@ -402,9 +402,9 @@ fn translateInstruction(
             try module.emit(.f64_mul);
         },
         .op_lt_local_const => {
-            const packed = instr.operand;
-            const local_slot = (packed >> 8) & 0xFF;
-            const const_idx = packed & 0xFF;
+            const packed_operand = instr.operand;
+            const local_slot = (packed_operand >> 8) & 0xFF;
+            const const_idx = packed_operand & 0xFF;
             try module.emitLocalGet(local_slot);
             const val = chunk.constants[const_idx];
             if (val.asInteger()) |i| {
