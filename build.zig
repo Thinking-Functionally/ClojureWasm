@@ -163,6 +163,26 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(exe);
 
+    // cljw-ir — Standalone IR compiler tool (Phase 1)
+    // Compiles .clj sources to IR EDN without requiring bootstrap.
+    // Shares infrastructure with cljw via module imports.
+    const ir_mod = b.createModule(.{
+        .root_source_file = b.path("src/cljw_ir.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = optimize != .Debug and !profile,
+        .unwind_tables = if (optimize != .Debug and !profile) .none else null,
+    });
+    ir_mod.addOptions("build_options", build_options);
+    // Shared infrastructure: main.zig's modules are available to cljw_ir
+    ir_mod.addImport("main", exe_mod);
+    if (zwasm_mod) |zm| ir_mod.addImport("zwasm", zm);
+    const ir_exe = b.addExecutable(.{
+        .name = "cljw-ir",
+        .root_module = ir_mod,
+    });
+    b.installArtifact(ir_exe);
+
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| run_cmd.addArgs(args);

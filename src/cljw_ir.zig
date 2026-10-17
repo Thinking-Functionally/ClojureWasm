@@ -99,6 +99,7 @@ pub fn main(init: std.process.Init) !void {
 
     // Compile Node → IR
     var ctx = ir_codegen.CompileContext{ .allocator = arena_alloc };
+    defer ctx.deinit();
     const ir_value = try ir_codegen.compileNode(&ctx, node);
 
     // Output IR EDN

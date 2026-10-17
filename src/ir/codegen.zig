@@ -15,6 +15,12 @@ const Node = node_mod.Node;
 const FnNode = node_mod.FnNode;
 const FnMethod = node_mod.FnMethod;
 
+/// Compilation error set (explicit to break Zig 0.16 inferred error set dependency loop)
+pub const CompileError = error{
+    OutOfMemory,
+    UnsupportedNode,
+};
+
 /// IR Value ID - SSA-style identification
 pub const IRValueID = union(enum) {
     val: u32, // :val/NNN
@@ -24,19 +30,14 @@ pub const IRValueID = union(enum) {
     fn_ref: []const u8, // :fn/user-add-1
     block: []const u8, // :block/entry
 
-    pub fn format(
-        self: IRValueID,
-        comptime _: []const u8,
-        _: std.fmt.FormatOptions,
-        writer: anytype,
-    ) !void {
+    pub fn format(self: IRValueID, w: *std.Io.Writer) std.Io.Writer.Error!void {
         return switch (self) {
-            .val => |n| writer.print(":val/{d}", .{n}),
-            .param => |name| writer.print(":param/{s}", .{name}),
-            .local => |name| writer.print(":local/{s}", .{name}),
-            .capture => |name| writer.print(":capture/{s}", .{name}),
-            .fn_ref => |name| writer.print(":fn/{s}", .{name}),
-            .block => |name| writer.print(":block/{s}", .{name}),
+            .val => |n| w.print(":val/{d}", .{n}),
+            .param => |name| w.print(":param/{s}", .{name}),
+            .local => |name| w.print(":local/{s}", .{name}),
+            .capture => |name| w.print(":capture/{s}", .{name}),
+            .fn_ref => |name| w.print(":fn/{s}", .{name}),
+            .block => |name| w.print(":block/{s}", .{name}),
         };
     }
 };
@@ -65,7 +66,7 @@ pub const BasicBlock = struct {
         for (self.instructions.items) |*instr| {
             instr.deinit(allocator);
         }
-        self.instructions.deinit();
+        self.instructions.deinit(allocator);
         if (self.terminator) |*term| {
             term.deinit(allocator);
         }
@@ -90,18 +91,26 @@ pub const FunctionIR = struct {
         for (self.blocks.items) |*block| {
             block.deinit(allocator);
         }
-        self.blocks.deinit();
+        self.blocks.deinit(allocator);
         allocator.free(self.params);
         allocator.free(self.captures);
     }
 };
 
-/// Compilation context - manages SSA value counters
+/// Compilation context - manages SSA value counters + function registry
 pub const CompileContext = struct {
     allocator: std.mem.Allocator,
     val_counter: u32 = 0,
     fn_counter: u32 = 0,
     block_counter: u32 = 0,
+    functions: std.ArrayList(FunctionIR) = .empty,
+
+    pub fn deinit(self: *CompileContext) void {
+        for (self.functions.items) |*func| {
+            func.deinit(self.allocator);
+        }
+        self.functions.deinit(self.allocator);
+    }
 
     /// Generate fresh :val/N ID
     pub fn freshValue(self: *CompileContext) IRValueID {
@@ -125,51 +134,56 @@ pub const CompileContext = struct {
         const name = try std.fmt.allocPrint(self.allocator, "{s}-{d}", .{ label, self.block_counter });
         return .{ .block = name };
     }
+
+    /// Register a function and return its ID
+    pub fn registerFunction(self: *CompileContext, func: FunctionIR) !IRValueID {
+        try self.functions.append(self.allocator, func);
+        return .{ .fn_ref = func.id };
+    }
 };
 
-/// Compile FnNode → FunctionIR
+/// Compile FnNode → IR function reference
 ///
 /// Maps TreeWalk FnNode semantics (private/notes/phase1_treewalk_study.md) to IR v2.0:
 /// - slot_base → :captures field
-/// - methods array → multiple fixed-arity FunctionIR entries
+/// - methods array → multiple fixed-arity FunctionIR entries (multi-arity)
 /// - variadic → separate FunctionIR with :variadic arity
 ///
 /// **Key TreeWalk invariant**: closure capture is BY-VALUE snapshot of `locals[0..slot_base)`.
 /// The IR `:make-closure` instruction encodes this as the `:captures` list.
+///
+/// Returns the IRValueID of the primary function (first method or single-arity).
 pub fn compileFnNode(
     ctx: *CompileContext,
     fn_node: FnNode,
-) ![]FunctionIR {
-    const methods_len = fn_node.methods.len + @intFromBool(fn_node.variadic != null);
-    var functions = try std.ArrayList(FunctionIR).initCapacity(ctx.allocator, methods_len);
-    errdefer {
-        for (functions.items) |*f| f.deinit(ctx.allocator);
-        functions.deinit();
-    }
-
+) !IRValueID {
     // Generate capture list from slot_base
     // TreeWalk: captures locals[0..slot_base) by value
     var captures = try std.ArrayList([]const u8).initCapacity(ctx.allocator, fn_node.slot_base);
-    errdefer captures.deinit();
+    errdefer captures.deinit(ctx.allocator);
     var i: u16 = 0;
     while (i < fn_node.slot_base) : (i += 1) {
         const capture_name = try std.fmt.allocPrint(ctx.allocator, "slot{d}", .{i});
-        try captures.append(capture_name);
+        try captures.append(ctx.allocator, capture_name);
     }
+
+    var first_fn_id: ?IRValueID = null;
 
     // Compile each fixed-arity method
     for (fn_node.methods) |method| {
         const func = try compileFnMethod(ctx, fn_node, method, captures.items);
-        try functions.append(func);
+        const fn_id = try ctx.registerFunction(func);
+        if (first_fn_id == null) first_fn_id = fn_id;
     }
 
     // Compile variadic method (if present)
     if (fn_node.variadic) |variadic_method| {
         const func = try compileFnMethod(ctx, fn_node, variadic_method, captures.items);
-        try functions.append(func);
+        const fn_id = try ctx.registerFunction(func);
+        if (first_fn_id == null) first_fn_id = fn_id;
     }
 
-    return functions.toOwnedSlice();
+    return first_fn_id.?;
 }
 
 /// Compile a single FnMethod → FunctionIR
@@ -191,23 +205,24 @@ fn compileFnMethod(
     const cap_copy = try ctx.allocator.dupe([]const u8, captures);
     errdefer ctx.allocator.free(cap_copy);
 
-    // Determine arity
-    const arity_field = if (method.has_rest)
-        FunctionIR.Arity{ .variadic = .{ .required = method.arity, .rest = true } }
+    // Determine arity (direct union initialization with explicit type annotation)
+    const ArityType = @TypeOf(@as(FunctionIR, undefined).arity);
+    const arity_field: ArityType = if (method.has_rest)
+        .{ .variadic = .{ .required = method.arity, .rest = true } }
     else
-        FunctionIR.Arity{ .fixed = method.arity };
+        .{ .fixed = method.arity };
 
     // Create entry block
-    var blocks = std.ArrayList(BasicBlock).init(ctx.allocator);
+    var blocks: std.ArrayList(BasicBlock) = .empty;
     errdefer {
         for (blocks.items) |*block| block.deinit(ctx.allocator);
-        blocks.deinit();
+        blocks.deinit(ctx.allocator);
     }
 
     const entry_block_id = try ctx.freshBlockID("entry");
     var entry_block = BasicBlock{
         .id = entry_block_id,
-        .instructions = std.ArrayList(IRInstr).init(ctx.allocator),
+        .instructions = .empty,
     };
 
     // Compile method.body → entry_block instructions
@@ -219,7 +234,7 @@ fn compileFnMethod(
         .args = &[_]IRValueID{body_val},
     };
 
-    try blocks.append(entry_block);
+    try blocks.append(ctx.allocator, entry_block);
 
     return FunctionIR{
         .id = fn_name_slice,
@@ -237,15 +252,16 @@ fn compileFnMethod(
 ///
 /// This is the main entry point that dispatches to node-type-specific compilers.
 /// Maps TreeWalk `eval(node)` pattern to IR generation.
-pub fn compileNode(ctx: *CompileContext, node: *const Node) !IRValueID {
+pub fn compileNode(ctx: *CompileContext, node: *const Node) CompileError!IRValueID {
     return switch (node.*) {
-        .fn_node => error.UnsupportedNode, // Handled separately via compileFnNode
+        .fn_node => |fn_node| try compileFnNode(ctx, fn_node),
         .call_node => |call| try compileCallNode(ctx, call),
         .let_node => |let_node| try compileLetNode(ctx, let_node),
         .if_node => |if_node| try compileIfNode(ctx, if_node),
         .def_node => |def| try compileDefNode(ctx, def),
         .constant => |c| try compileConstantNode(ctx, c),
         .local_ref => |l| try compileLocalRef(ctx, l),
+        .var_ref => |v| try compileVarRef(ctx, v),
         .loop_node => |loop| try compileLoopNode(ctx, loop),
         .recur_node => |recur| try compileRecurNode(ctx, recur),
         .try_node => |try_node| try compileTryNode(ctx, try_node),
@@ -253,6 +269,7 @@ pub fn compileNode(ctx: *CompileContext, node: *const Node) !IRValueID {
         else => error.UnsupportedNode,
     };
 }
+
 
 /// Compile CallNode → IR :call instruction
 ///
@@ -268,16 +285,16 @@ fn compileCallNode(ctx: *CompileContext, call: node_mod.CallNode) !IRValueID {
 
     // 2. Compile all arguments
     var args = try std.ArrayList(IRValueID).initCapacity(ctx.allocator, call.args.len);
-    defer args.deinit();
+    defer args.deinit(ctx.allocator);
 
     for (call.args) |*arg| {
         const arg_val = try compileNode(ctx, arg);
-        try args.append(arg_val);
+        try args.append(ctx.allocator, arg_val);
     }
 
     // 3. Generate :call instruction
     const result = ctx.freshValue();
-    const args_slice = try args.toOwnedSlice();
+    const args_slice = try args.toOwnedSlice(ctx.allocator);
 
     // Note: This will be added to current basic block when we have block context
     // For now, just return the result ID
@@ -389,6 +406,22 @@ fn compileConstantNode(ctx: *CompileContext, const_node: node_mod.ConstantNode) 
 fn compileLocalRef(_: *CompileContext, local: node_mod.LocalRef) !IRValueID {
     // Local references use the local name directly
     return IRValueID{ .local = local.name };
+}
+
+/// Compile VarRef → IR :var-ref instruction
+///
+/// Maps TreeWalk evalVarRef (resolved *const Var) to IR.
+/// Phase 1: returns a placeholder value ID; full var resolution pending IR v2 runtime.
+fn compileVarRef(ctx: *CompileContext, var_ref: node_mod.VarRef) !IRValueID {
+    _ = var_ref; // TODO: Encode var_ref.var_ptr namespace + name into IR
+    const result = ctx.freshValue();
+
+    _ = IRInstr{
+        .op = "var-ref",
+        .result = result,
+    };
+
+    return result;
 }
 
 /// Format FunctionIR → EDN string
@@ -599,11 +632,11 @@ fn compileLoopNode(ctx: *CompileContext, loop_node: node_mod.LoopNode) !IRValueI
         ctx.allocator,
         loop_node.bindings.len
     );
-    defer init_vals.deinit();
+    defer init_vals.deinit(ctx.allocator);
 
     for (loop_node.bindings) |binding| {
         const init_val = try compileNode(ctx, binding.value_expr);
-        try init_vals.append(init_val);
+        try init_vals.append(ctx.allocator, init_val);
     }
 
     // 3. Create loop header block with phi nodes
@@ -616,12 +649,12 @@ fn compileLoopNode(ctx: *CompileContext, loop_node: node_mod.LoopNode) !IRValueI
         ctx.allocator,
         loop_node.bindings.len
     );
-    defer phi_results.deinit();
+    defer phi_results.deinit(ctx.allocator);
 
     for (loop_node.bindings, 0..) |binding, i| {
         _ = binding;
         const phi_result = ctx.freshValue();
-        try phi_results.append(phi_result);
+        try phi_results.append(ctx.allocator, phi_result);
 
         // Generate phi instruction (placeholder - will be filled by actual IR builder)
         _ = IRInstr{
@@ -658,17 +691,17 @@ fn compileRecurNode(ctx: *CompileContext, recur: node_mod.RecurNode) !IRValueID 
         ctx.allocator,
         recur.args.len
     );
-    defer arg_vals.deinit();
+    defer arg_vals.deinit(ctx.allocator);
 
     for (recur.args) |*arg| {
         const arg_val = try compileNode(ctx, arg);
-        try arg_vals.append(arg_val);
+        try arg_vals.append(ctx.allocator, arg_val);
     }
 
     // 2. Generate recur-jump terminator
     // This jumps back to the loop header and provides new values for phi nodes
     const result = ctx.freshValue();
-    const args_slice = try arg_vals.toOwnedSlice();
+    const args_slice = try arg_vals.toOwnedSlice(ctx.allocator);
 
     _ = IRInstr{
         .op = "recur-jump",
@@ -710,14 +743,14 @@ fn compileTryNode(ctx: *CompileContext, try_node: node_mod.TryNode) !IRValueID {
         ctx.allocator,
         try_node.catch_clauses.len
     );
-    defer catch_blocks.deinit();
+    defer catch_blocks.deinit(ctx.allocator);
 
     for (try_node.catch_clauses, 0..) |clause, i| {
         _ = clause;
         const catch_block = try ctx.freshBlockID(
             try std.fmt.allocPrint(ctx.allocator, "catch_{d}", .{i})
         );
-        try catch_blocks.append(catch_block);
+        try catch_blocks.append(ctx.allocator, catch_block);
 
         // Each catch clause has:
         // - binding_name: the exception is bound to this local

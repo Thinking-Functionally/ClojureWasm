@@ -44,8 +44,8 @@ test_expr() {
     fi
     echo "  IR:       $ir_out"
 
-    # Phase 1: verify IR compiled successfully (starts with :val/ or :local/ or :param/)
-    if [[ "$ir_out" =~ ^:(val|local|param)/ ]]; then
+    # Phase 1.5: verify IR compiled successfully (starts with :val/ or :local/ or :param/ or :fn/)
+    if [[ "$ir_out" =~ ^:(val|local|param|fn)/ ]]; then
         echo "  ✓ PASS"
         ((pass_count++))
     else
@@ -83,6 +83,13 @@ test_expr ":keyword" "keyword constant"
 test_expr "true" "boolean true"
 test_expr "false" "boolean false"
 test_expr "nil" "nil constant"
+
+# Functions (Phase 1.5)
+test_expr "(fn* [x] x)" "identity function"
+test_expr "(fn* [x y] (+ x y))" "addition function"
+test_expr "(fn* [x] (* x 2))" "simple function body"
+test_expr "((fn* [x] x) 42)" "function application"
+test_expr "(let [f (fn* [x] (* x 2))] (f 10))" "function in let"
 
 # Summary
 echo "=========================================="
