@@ -47,7 +47,7 @@ pub const ControlFlowAnalysis = struct {
     /// 第一遍：掃描 bytecode，建立跳轉目標映射
     pub fn analyze(self: *ControlFlowAnalysis, chunk: BytecodeChunk) ControlFlowError!void {
         for (chunk.instructions, 0..) |instr, ip| {
-            switch (instr.op) {
+            switch (instr.opcode) {
                 // 無條件跳轉：記錄目標 IP
                 .op_jump => {
                     const target = try self.computeJumpTarget(ip, instr.operand);
@@ -76,7 +76,7 @@ pub const ControlFlowAnalysis = struct {
         }
     }
 
-    fn computeJumpTarget(self: *ControlFlowAnalysis, ip: usize, operand: u16) ControlFlowError!usize {
+    pub fn computeJumpTarget(self: *ControlFlowAnalysis, ip: usize, operand: u16) ControlFlowError!usize {
         _ = self;
         const offset: i16 = @bitCast(operand);
         if (offset >= 0) {
@@ -109,23 +109,25 @@ pub const BlockInfo = struct {
 /// Block 棧：追蹤當前嘅 Wasm block 深度
 pub const BlockStack = struct {
     stack: std.ArrayList(BlockInfo),
+    allocator: std.mem.Allocator,
     next_label: u32,
 
     pub fn init(allocator: std.mem.Allocator) BlockStack {
         return .{
-            .stack = std.ArrayList(BlockInfo).init(allocator),
+            .stack = .empty,
+            .allocator = allocator,
             .next_label = 0,
         };
     }
 
     pub fn deinit(self: *BlockStack) void {
-        self.stack.deinit();
+        self.stack.deinit(self.allocator);
     }
 
     pub fn push(self: *BlockStack, kind: BlockKind, start_ip: usize) !u32 {
         const label = self.next_label;
         self.next_label += 1;
-        try self.stack.append(.{
+        try self.stack.append(self.allocator, .{
             .kind = kind,
             .label = label,
             .start_ip = start_ip,
@@ -178,28 +180,28 @@ test "ControlFlowAnalysis: scan forward jump" {
     const allocator = testing.allocator;
 
     // 構造簡單嘅 jump: IP 0 → IP 5
-    var instructions = std.ArrayList(Instruction).init(allocator);
-    defer instructions.deinit();
+    var instructions: std.ArrayList(opcode_mod.WireInstr) = .empty;
+    defer instructions.deinit(allocator);
 
     // IP 0: jump +5
-    try instructions.append(.{ .op = .op_jump, .operand = 5, .loc = null });
+    try instructions.append(allocator, .{ .opcode = .op_jump, .operand = 5 });
     // IP 1-4: nop
-    try instructions.append(.{ .op = .op_pop, .operand = 0, .loc = null });
-    try instructions.append(.{ .op = .op_pop, .operand = 0, .loc = null });
-    try instructions.append(.{ .op = .op_pop, .operand = 0, .loc = null });
-    try instructions.append(.{ .op = .op_pop, .operand = 0, .loc = null });
+    try instructions.append(allocator, .{ .opcode = .op_pop, .operand = 0 });
+    try instructions.append(allocator, .{ .opcode = .op_pop, .operand = 0 });
+    try instructions.append(allocator, .{ .opcode = .op_pop, .operand = 0 });
+    try instructions.append(allocator, .{ .opcode = .op_pop, .operand = 0 });
     // IP 5: target
-    try instructions.append(.{ .op = .op_ret, .operand = 0, .loc = null });
+    try instructions.append(allocator, .{ .opcode = .op_ret, .operand = 0 });
 
     const chunk = BytecodeChunk{
-        .instructions = try instructions.toOwnedSlice(),
+        .instructions = try instructions.toOwnedSlice(allocator),
         .constants = &[_]@import("../../runtime/value/value.zig").Value{},
         .call_sites = &[_]opcode_mod.CallSiteEntry{},
         .libspecs = &[_]opcode_mod.LibspecEntry{},
         .ns_filters = &[_]opcode_mod.NsFilterEntry{},
         .ctor_sites = &[_]opcode_mod.CtorEntry{},
         .import_sites = &[_]opcode_mod.ImportPair{},
-        .source_file = null,
+        .source_file = "",
     };
     defer allocator.free(chunk.instructions);
 

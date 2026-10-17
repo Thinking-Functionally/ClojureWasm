@@ -25,6 +25,9 @@ pub const BuildError = error{
     UnsupportedOpcode,
     TooManyLocals,
     TooManyConstants,
+    InvalidJumpTarget,
+    TooManyBlocks,
+    UnmatchedBlock,
 } || std.mem.Allocator.Error;
 
 /// Wasm 模組建造器
@@ -36,25 +39,25 @@ pub const WasmModuleBuilder = struct {
     pub fn init(allocator: std.mem.Allocator) WasmModuleBuilder {
         return .{
             .allocator = allocator,
-            .code = std.ArrayList(u8).init(allocator),
+            .code = .empty,
             .num_locals = 0,
         };
     }
 
     pub fn deinit(self: *WasmModuleBuilder) void {
-        self.code.deinit();
+        self.code.deinit(self.allocator);
     }
 
     /// 構建完整嘅 Wasm 模組
     ///
     /// 返回可以直接俾 zwasm 載入嘅字節碼
     pub fn build(self: *WasmModuleBuilder, chunk: BytecodeChunk) BuildError![]const u8 {
-        var module = std.ArrayList(u8).init(self.allocator);
-        errdefer module.deinit();
+        var module: std.ArrayList(u8) = .empty;
+        errdefer module.deinit(self.allocator);
 
         // Magic number + version
-        try module.appendSlice(&[_]u8{ 0x00, 0x61, 0x73, 0x6D }); // "\0asm"
-        try module.appendSlice(&[_]u8{ 0x01, 0x00, 0x00, 0x00 }); // version 1
+        try module.appendSlice(self.allocator, &[_]u8{ 0x00, 0x61, 0x73, 0x6D }); // "\0asm"
+        try module.appendSlice(self.allocator, &[_]u8{ 0x01, 0x00, 0x00, 0x00 }); // version 1
 
         // Type section: 定義函數簽名 [] -> [f64]
         try self.writeTypeSection(&module);
@@ -74,7 +77,7 @@ pub const WasmModuleBuilder = struct {
         // Code section: 函數體
         try self.writeCodeSection(&module, chunk);
 
-        return try module.toOwnedSlice();
+        return try module.toOwnedSlice(self.allocator);
     }
 
     fn writeImportSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8), chunk: BytecodeChunk) !void {
@@ -82,90 +85,90 @@ pub const WasmModuleBuilder = struct {
         // 簡化實現：導入一個 "env.print" 函數 (f64) → ()
         _ = chunk;
 
-        try module.append(0x02);
+        try module.append(self.allocator, 0x02);
 
-        var payload = std.ArrayList(u8).init(module.allocator);
-        defer payload.deinit();
+        var payload: std.ArrayList(u8) = .empty;
+        defer payload.deinit(self.allocator);
 
         // 1 個 import
         try self.writeLEB128(&payload, 1);
 
         // module name: "env"
         try self.writeLEB128(&payload, 3);
-        try payload.appendSlice("env");
+        try payload.appendSlice(self.allocator, "env");
 
         // field name: "print"
         try self.writeLEB128(&payload, 5);
-        try payload.appendSlice("print");
+        try payload.appendSlice(self.allocator, "print");
 
         // import kind: function (0x00)
-        try payload.append(0x00);
+        try payload.append(self.allocator, 0x00);
         // type index: 1 (需要添加到 type section)
         try self.writeLEB128(&payload, 1);
 
         try self.writeLEB128(module, @intCast(payload.items.len));
-        try module.appendSlice(payload.items);
+        try module.appendSlice(self.allocator, payload.items);
     }
 
     fn writeTableSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8)) !void {
         // Section ID 4 (table)
-        try module.append(0x04);
+        try module.append(self.allocator, 0x04);
 
-        var payload = std.ArrayList(u8).init(module.allocator);
-        defer payload.deinit();
+        var payload: std.ArrayList(u8) = .empty;
+        defer payload.deinit(self.allocator);
 
         // 1 個 table
         try self.writeLEB128(&payload, 1);
 
         // element type: funcref (0x70)
-        try payload.append(0x70);
+        try payload.append(self.allocator, 0x70);
 
         // limits: min=16, max=none
-        try payload.append(0x00); // flags: no maximum
+        try payload.append(self.allocator, 0x00); // flags: no maximum
         try self.writeLEB128(&payload, 16);
 
         try self.writeLEB128(module, @intCast(payload.items.len));
-        try module.appendSlice(payload.items);
+        try module.appendSlice(self.allocator, payload.items);
     }
 
     fn writeTypeSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8)) !void {
         // Section ID 1 (type)
-        try module.append(0x01);
+        try module.append(self.allocator, 0x01);
 
         // Section payload
-        var payload = std.ArrayList(u8).init(module.allocator);
-        defer payload.deinit();
+        var payload: std.ArrayList(u8) = .empty;
+        defer payload.deinit(self.allocator);
 
         // 2 個類型
         try self.writeLEB128(&payload, 2);
 
         // Type 0: main 函數 [] -> [f64]
-        try payload.append(0x60);
+        try payload.append(self.allocator, 0x60);
         // 0 個參數
         try self.writeLEB128(&payload, 0);
         // 1 個返回值 (f64)
         try self.writeLEB128(&payload, 1);
-        try payload.append(0x7C); // f64
+        try payload.append(self.allocator, 0x7C); // f64
 
         // Type 1: print 函數 [f64] -> []
-        try payload.append(0x60);
+        try payload.append(self.allocator, 0x60);
         // 1 個參數 (f64)
         try self.writeLEB128(&payload, 1);
-        try payload.append(0x7C); // f64
+        try payload.append(self.allocator, 0x7C); // f64
         // 0 個返回值
         try self.writeLEB128(&payload, 0);
 
         // 寫入 payload 長度同內容
         try self.writeLEB128(module, @intCast(payload.items.len));
-        try module.appendSlice(payload.items);
+        try module.appendSlice(self.allocator, payload.items);
     }
 
     fn writeFunctionSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8)) !void {
         // Section ID 3 (function)
-        try module.append(0x03);
+        try module.append(self.allocator, 0x03);
 
-        var payload = std.ArrayList(u8).init(module.allocator);
-        defer payload.deinit();
+        var payload: std.ArrayList(u8) = .empty;
+        defer payload.deinit(self.allocator);
 
         // 1 個函數
         try self.writeLEB128(&payload, 1);
@@ -173,15 +176,15 @@ pub const WasmModuleBuilder = struct {
         try self.writeLEB128(&payload, 0);
 
         try self.writeLEB128(module, @intCast(payload.items.len));
-        try module.appendSlice(payload.items);
+        try module.appendSlice(self.allocator, payload.items);
     }
 
     fn writeExportSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8)) !void {
         // Section ID 7 (export)
-        try module.append(0x07);
+        try module.append(self.allocator, 0x07);
 
-        var payload = std.ArrayList(u8).init(module.allocator);
-        defer payload.deinit();
+        var payload: std.ArrayList(u8) = .empty;
+        defer payload.deinit(self.allocator);
 
         // 1 個導出
         try self.writeLEB128(&payload, 1);
@@ -189,30 +192,30 @@ pub const WasmModuleBuilder = struct {
         // 導出名稱 "main"
         const name = "main";
         try self.writeLEB128(&payload, @intCast(name.len));
-        try payload.appendSlice(name);
+        try payload.appendSlice(self.allocator, name);
 
         // 導出類型: 函數
-        try payload.append(0x00);
+        try payload.append(self.allocator, 0x00);
         // 函數索引 0
         try self.writeLEB128(&payload, 0);
 
         try self.writeLEB128(module, @intCast(payload.items.len));
-        try module.appendSlice(payload.items);
+        try module.appendSlice(self.allocator, payload.items);
     }
 
     fn writeCodeSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8), chunk: BytecodeChunk) !void {
         // Section ID 10 (code)
-        try module.append(0x0A);
+        try module.append(self.allocator, 0x0A);
 
-        var section_payload = std.ArrayList(u8).init(module.allocator);
-        defer section_payload.deinit();
+        var section_payload: std.ArrayList(u8) = .empty;
+        defer section_payload.deinit(self.allocator);
 
         // 1 個函數體
         try self.writeLEB128(&section_payload, 1);
 
         // 函數體
-        var func_body = std.ArrayList(u8).init(self.allocator);
-        defer func_body.deinit();
+        var func_body: std.ArrayList(u8) = .empty;
+        defer func_body.deinit(self.allocator);
 
         // Locals 聲明 (先掃描需要幾多 locals)
         self.num_locals = try self.scanLocals(chunk);
@@ -221,7 +224,7 @@ pub const WasmModuleBuilder = struct {
         if (self.num_locals > 0) {
             try self.writeLEB128(&func_body, 1); // 1 組 locals
             try self.writeLEB128(&func_body, self.num_locals); // 數量
-            try func_body.append(0x7C); // f64
+            try func_body.append(self.allocator, 0x7C); // f64
         } else {
             try self.writeLEB128(&func_body, 0); // 0 組 locals
         }
@@ -235,15 +238,15 @@ pub const WasmModuleBuilder = struct {
         try self.translateWithControlFlow(&func_body, chunk, &cf_analysis);
 
         // end
-        try func_body.append(0x0B);
+        try func_body.append(self.allocator, 0x0B);
 
         // 寫入函數體長度同內容
         try self.writeLEB128(&section_payload, @intCast(func_body.items.len));
-        try section_payload.appendSlice(func_body.items);
+        try section_payload.appendSlice(self.allocator, func_body.items);
 
         // 寫入 section 長度同內容
         try self.writeLEB128(module, @intCast(section_payload.items.len));
-        try module.appendSlice(section_payload.items);
+        try module.appendSlice(self.allocator, section_payload.items);
     }
 
     /// 帶控制流結構嘅指令翻譯
@@ -264,8 +267,8 @@ pub const WasmModuleBuilder = struct {
         const has_recur = cf_analysis.loop_starts.count() > 0;
         if (has_recur) {
             // loop (result type 同 func 一致: [] → [f64])
-            try code.append(0x03); // loop
-            try code.append(0x7C); // result type: f64
+            try code.append(self.allocator, 0x03); // loop
+            try code.append(self.allocator, 0x7C); // result type: f64
             const loop_label = try block_stack.push(.loop, 0);
             try ip_to_label.put(0, loop_label);
         }
@@ -274,14 +277,14 @@ pub const WasmModuleBuilder = struct {
             // 檢查當前 IP 係咪跳轉目標 → 插入 block
             if (cf_analysis.jump_targets.contains(ip)) {
                 // block (result type: [] → [])
-                try code.append(0x02); // block
-                try code.append(0x40); // void
+                try code.append(self.allocator, 0x02); // block
+                try code.append(self.allocator, 0x40); // void
                 const label = try block_stack.push(.block, ip);
                 try ip_to_label.put(ip, label);
             }
 
             // 翻譯指令
-            switch (instr.op) {
+            switch (instr.opcode) {
                 .op_jump => {
                     // 計算目標 IP
                     const target_ip = try cf_analysis.computeJumpTarget(ip, instr.operand);
@@ -289,7 +292,7 @@ pub const WasmModuleBuilder = struct {
                     const target_label = ip_to_label.get(target_ip) orelse return BuildError.UnsupportedOpcode;
                     // br <depth>
                     const depth = block_stack.computeBranchDepth(target_label) orelse return BuildError.UnsupportedOpcode;
-                    try code.append(0x0C); // br
+                    try code.append(self.allocator, 0x0C); // br
                     try self.writeLEB128(code, depth);
                 },
                 .op_jump_if_false => {
@@ -300,22 +303,26 @@ pub const WasmModuleBuilder = struct {
                     const depth = block_stack.computeBranchDepth(target_label) orelse return BuildError.UnsupportedOpcode;
 
                     // i32.eqz (f64 → i32 cast + eqz)
-                    try code.append(0xB2); // i32.trunc_f64_s
-                    try code.append(0x45); // i32.eqz
+                    try code.append(self.allocator, 0xB2); // i32.trunc_f64_s
+                    try code.append(self.allocator, 0x45); // i32.eqz
                     // br_if <depth>
-                    try code.append(0x0D); // br_if
+                    try code.append(self.allocator, 0x0D); // br_if
                     try self.writeLEB128(code, depth);
                 },
                 .op_recur => {
                     // recur 跳到最近嘅 loop 開始
                     const loop_label = block_stack.findNearestLoop() orelse return BuildError.UnsupportedOpcode;
                     const depth = block_stack.computeBranchDepth(loop_label) orelse return BuildError.UnsupportedOpcode;
-                    try code.append(0x0C); // br (跳到 loop 開始)
+                    try code.append(self.allocator, 0x0C); // br (跳到 loop 開始)
                     try self.writeLEB128(code, depth);
                 },
                 else => {
-                    // 普通指令
-                    try self.translateInstruction(code, chunk, instr);
+                    // 普通指令: 將 WireInstr 轉換為 Instruction
+                    const decoded_instr = opcode_mod.Instruction{
+                        .opcode = instr.opcode,
+                        .operand = instr.operand,
+                    };
+                    try self.translateInstruction(code, chunk, decoded_instr);
                 },
             }
 
@@ -325,14 +332,14 @@ pub const WasmModuleBuilder = struct {
 
         // 關閉所有未關閉嘅 block
         while (block_stack.pop()) |_| {
-            try code.append(0x0B); // end
+            try code.append(self.allocator, 0x0B); // end
         }
     }
 
     fn scanLocals(_: *WasmModuleBuilder, chunk: BytecodeChunk) !u32 {
         var max_local: u32 = 0;
         for (chunk.instructions) |instr| {
-            switch (instr.op) {
+            switch (instr.opcode) {
                 .op_load_local, .op_store_local => {
                     const idx = @as(u32, instr.operand);
                     if (idx >= max_local) max_local = idx + 1;
@@ -349,48 +356,52 @@ pub const WasmModuleBuilder = struct {
         chunk: BytecodeChunk,
         instr: opcode_mod.Instruction,
     ) BuildError!void {
-        switch (instr.op) {
+        switch (instr.opcode) {
             .op_const => {
                 const val = chunk.constants[instr.operand];
-                if (val.asInteger()) |i| {
+                // Value is enum(u64), check with bit pattern
+                const val_int = @intFromEnum(val);
+                const is_integer = (val_int & 0xFFF8000000000000) == 0x0000000000000000;
+                if (is_integer) {
+                    const i = val.asInteger();
                     // f64.const
-                    try code.append(0x44);
+                    try code.append(self.allocator, 0x44);
                     const f: f64 = @floatFromInt(i);
                     const bytes = @as([8]u8, @bitCast(f));
-                    try code.appendSlice(&bytes);
+                    try code.appendSlice(self.allocator, &bytes);
                 } else {
                     return BuildError.UnsupportedOpcode;
                 }
             },
             .op_load_local => {
                 // local.get
-                try code.append(0x20);
+                try code.append(self.allocator, 0x20);
                 try self.writeLEB128(code, @as(u32, instr.operand));
             },
             .op_store_local => {
                 // local.set
-                try code.append(0x21);
+                try code.append(self.allocator, 0x21);
                 try self.writeLEB128(code, @as(u32, instr.operand));
             },
             .op_ret => {
                 // return
-                try code.append(0x0F);
+                try code.append(self.allocator, 0x0F);
             },
             .op_pop => {
                 // drop
-                try code.append(0x1A);
+                try code.append(self.allocator, 0x1A);
             },
             .op_add => {
                 // f64.add
-                try code.append(0xA0);
+                try code.append(self.allocator, 0xA0);
             },
             .op_sub => {
                 // f64.sub
-                try code.append(0xA1);
+                try code.append(self.allocator, 0xA1);
             },
             .op_mul => {
                 // f64.mul
-                try code.append(0xA2);
+                try code.append(self.allocator, 0xA2);
             },
 
             // Tier 1: Control flow
@@ -417,7 +428,7 @@ pub const WasmModuleBuilder = struct {
                 const arity = @as(u32, instr.operand);
                 // 簡化：table index 喺 stack 頂 — [arg0, arg1, ..., fn_idx]
                 // call_indirect $type_idx $table_idx
-                try code.append(0x11); // call_indirect
+                try code.append(self.allocator, 0x11); // call_indirect
                 try self.writeLEB128(code, 0); // type index 0 (假設單一類型)
                 try self.writeLEB128(code, 0); // table index 0
                 _ = arity; // TODO: 根據 arity 調整 type index
@@ -426,7 +437,7 @@ pub const WasmModuleBuilder = struct {
                 // Import builtin functions: call imported function
                 // operand = builtin index (假設 0 = 我哋導入嘅 "env.print")
                 const builtin_idx = @as(u32, instr.operand);
-                try code.append(0x10); // call
+                try code.append(self.allocator, 0x10); // call
                 try self.writeLEB128(code, builtin_idx); // function index (import 0)
             },
 
@@ -437,16 +448,15 @@ pub const WasmModuleBuilder = struct {
     }
 
     fn writeLEB128(self: *WasmModuleBuilder, buffer: *std.ArrayList(u8), value: u32) !void {
-        _ = self;
         var v = value;
         while (true) {
             const byte = @as(u8, @intCast(v & 0x7F));
             v >>= 7;
             if (v == 0) {
-                try buffer.append(byte);
+                try buffer.append(self.allocator, byte);
                 break;
             } else {
-                try buffer.append(byte | 0x80);
+                try buffer.append(self.allocator, byte | 0x80);
             }
         }
     }
@@ -466,10 +476,10 @@ test "buildWasmModule: simple constant" {
     const allocator = testing.allocator;
 
     // 構造簡單嘅 BytecodeChunk: [(const 42), (ret)]
-    const instructions = try allocator.alloc(opcode_mod.Instruction, 2);
+    const instructions = try allocator.alloc(opcode_mod.WireInstr, 2);
     errdefer allocator.free(instructions);
-    instructions[0] = .{ .op = .op_const, .operand = 0, .loc = null };
-    instructions[1] = .{ .op = .op_ret, .operand = 0, .loc = null };
+    instructions[0] = .{ .opcode = .op_const, .operand = 0 };
+    instructions[1] = .{ .opcode = .op_ret, .operand = 0 };
 
     const constants = try allocator.alloc(Value, 1);
     errdefer allocator.free(constants);
@@ -483,7 +493,7 @@ test "buildWasmModule: simple constant" {
         .ns_filters = &[_]opcode_mod.NsFilterEntry{},
         .ctor_sites = &[_]opcode_mod.CtorEntry{},
         .import_sites = &[_]opcode_mod.ImportPair{},
-        .source_file = null,
+        .source_file = "",
     };
     defer {
         allocator.free(chunk.instructions);
@@ -515,12 +525,12 @@ test "buildWasmModule: addition (+ 1 2)" {
 
     // BytecodeChunk for: (+ 1 2)
     // [(const 1), (const 2), (add), (ret)]
-    const instructions = try allocator.alloc(opcode_mod.Instruction, 4);
+    const instructions = try allocator.alloc(opcode_mod.WireInstr, 4);
     errdefer allocator.free(instructions);
-    instructions[0] = .{ .op = .op_const, .operand = 0, .loc = null };
-    instructions[1] = .{ .op = .op_const, .operand = 1, .loc = null };
-    instructions[2] = .{ .op = .op_add, .operand = 0, .loc = null };
-    instructions[3] = .{ .op = .op_ret, .operand = 0, .loc = null };
+    instructions[0] = .{ .opcode = .op_const, .operand = 0 };
+    instructions[1] = .{ .opcode = .op_const, .operand = 1 };
+    instructions[2] = .{ .opcode = .op_add, .operand = 0 };
+    instructions[3] = .{ .opcode = .op_ret, .operand = 0 };
 
     const constants = try allocator.alloc(Value, 2);
     errdefer allocator.free(constants);
@@ -535,7 +545,7 @@ test "buildWasmModule: addition (+ 1 2)" {
         .ns_filters = &[_]opcode_mod.NsFilterEntry{},
         .ctor_sites = &[_]opcode_mod.CtorEntry{},
         .import_sites = &[_]opcode_mod.ImportPair{},
-        .source_file = null,
+        .source_file = "",
     };
     defer {
         allocator.free(chunk.instructions);

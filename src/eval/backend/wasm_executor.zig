@@ -72,9 +72,10 @@ pub const WasmExecutor = struct {
         };
 
         // Step 4: zwasm 結果轉換為 cljw Value
-        const result_f64 = results[0].f64;
-        const result_i64: i64 = @intFromFloat(result_f64);
-        return Value.initInteger(result_i64);
+        // zwasm Value.f64 is u64 (bit pattern), need @bitCast to f64
+        const result_u64 = results[0].f64;
+        const result_f64: f64 = @bitCast(result_u64);
+        return Value.initInteger(@intFromFloat(result_f64));
     }
 };
 
@@ -93,7 +94,7 @@ test "WasmExecutor: init and deinit" {
     try testing.expect(true);
 }
 
-test "WasmExecutor: simple constant (placeholder)" {
+test "WasmExecutor: simple constant" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
@@ -101,10 +102,10 @@ test "WasmExecutor: simple constant (placeholder)" {
     defer executor.deinit();
 
     // 構造簡單嘅 BytecodeChunk: [(const 42), (ret)]
-    const instructions = try allocator.alloc(opcode_mod.Instruction, 2);
+    const instructions = try allocator.alloc(opcode_mod.WireInstr, 2);
     defer allocator.free(instructions);
-    instructions[0] = .{ .op = .op_const, .operand = 0, .loc = null };
-    instructions[1] = .{ .op = .op_ret, .operand = 0, .loc = null };
+    instructions[0] = .{ .opcode = .op_const, .operand = 0 };
+    instructions[1] = .{ .opcode = .op_ret, .operand = 0 };
 
     const constants = try allocator.alloc(Value, 1);
     defer allocator.free(constants);
@@ -118,12 +119,13 @@ test "WasmExecutor: simple constant (placeholder)" {
         .ns_filters = &[_]opcode_mod.NsFilterEntry{},
         .ctor_sites = &[_]opcode_mod.CtorEntry{},
         .import_sites = &[_]opcode_mod.ImportPair{},
-        .source_file = null,
+        .source_file = "",
     };
 
-    // Execute (暫時返回 nil，因為 zwasm 整合未完成)
+    // Execute with zwasm integration (Tier 3 complete)
     const result = try executor.execute(chunk);
 
-    // Placeholder: 預期返回 nil
-    try testing.expect(result.isNil());
+    // Tier 3: zwasm returns Value.initInteger(42)
+    const i = result.asInteger();
+    try testing.expectEqual(@as(i48, 42), i);
 }

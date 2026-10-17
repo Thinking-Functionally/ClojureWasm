@@ -27,22 +27,22 @@ pub const WasmModule = struct {
     pub fn init(allocator: std.mem.Allocator) WasmModule {
         return .{
             .allocator = allocator,
-            .code = std.ArrayList(u8).init(allocator),
+            .code = .empty,
             .num_locals = 0,
             .num_params = 0,
         };
     }
 
     pub fn deinit(self: *WasmModule) void {
-        self.code.deinit();
+        self.code.deinit(self.allocator);
     }
 
     pub fn emit(self: *WasmModule, op: WasmOp) !void {
-        try self.code.append(@intFromEnum(op));
+        try self.code.append(self.allocator, @intFromEnum(op));
     }
 
     pub fn emitU8(self: *WasmModule, byte: u8) !void {
-        try self.code.append(byte);
+        try self.code.append(self.allocator, byte);
     }
 
     pub fn emitLocalGet(self: *WasmModule, idx: u32) !void {
@@ -58,7 +58,7 @@ pub const WasmModule = struct {
     pub fn emitF64Const(self: *WasmModule, val: f64) !void {
         try self.emit(.f64_const);
         const bytes = @as([8]u8, @bitCast(val));
-        try self.code.appendSlice(&bytes);
+        try self.code.appendSlice(self.allocator, &bytes);
     }
 
     pub fn emitCall(self: *WasmModule, func_idx: u32) !void {
@@ -72,10 +72,10 @@ pub const WasmModule = struct {
             const byte = @as(u8, @intCast(v & 0x7F));
             v >>= 7;
             if (v == 0) {
-                try self.code.append(byte);
+                try self.code.append(self.allocator, byte);
                 break;
             } else {
-                try self.code.append(byte | 0x80);
+                try self.code.append(self.allocator, byte | 0x80);
             }
         }
     }
@@ -125,7 +125,7 @@ pub fn translate(
     // Phase 3.1: 掃描 chunk 計算需要幾多 locals
     var max_local: u32 = 0;
     for (chunk.instructions) |instr| {
-        switch (instr.op) {
+        switch (instr.opcode) {
             .op_load_local, .op_store_local => {
                 const idx = @as(u32, instr.operand);
                 if (idx > max_local) max_local = idx;
@@ -136,7 +136,11 @@ pub fn translate(
     module.num_locals = max_local + 1;
 
     // Phase 3.2: 翻譯每個指令
-    for (chunk.instructions) |instr| {
+    for (chunk.instructions) |wire_instr| {
+        const instr = opcode_mod.Instruction{
+            .opcode = wire_instr.opcode,
+            .operand = wire_instr.operand,
+        };
         try translateInstruction(&module, chunk, instr);
     }
 
@@ -148,12 +152,16 @@ fn translateInstruction(
     chunk: BytecodeChunk,
     instr: opcode_mod.Instruction,
 ) TranslateError!void {
-    switch (instr.op) {
+    switch (instr.opcode) {
         // ===== 基礎指令 =====
         .op_const => {
             const val = chunk.constants[instr.operand];
             // 只處理數字 Value（簡化 Phase 3 實現）
-            if (val.asInteger()) |i| {
+            // Value is enum(u64), check with @intFromEnum
+            const val_int = @intFromEnum(val);
+            const is_integer = (val_int & 0xFFF8000000000000) == 0x0000000000000000;
+            if (is_integer) {
+                const i = val.asInteger();
                 try module.emitF64Const(@floatFromInt(i));
             } else {
                 // 其他類型（字串、符號、集合）需要 runtime object support
@@ -368,11 +376,8 @@ fn translateInstruction(
             const const_idx = packed_operand & 0xFF;
             try module.emitLocalGet(local_slot);
             const val = chunk.constants[const_idx];
-            if (val.asInteger()) |i| {
-                try module.emitF64Const(@floatFromInt(i));
-            } else {
-                return TranslateError.UnsupportedOpcode;
-            }
+            const i = val.asInteger();
+            try module.emitF64Const(@floatFromInt(i));
             try module.emit(.f64_add);
         },
         .op_sub_local_const => {
@@ -381,11 +386,8 @@ fn translateInstruction(
             const const_idx = packed_operand & 0xFF;
             try module.emitLocalGet(local_slot);
             const val = chunk.constants[const_idx];
-            if (val.asInteger()) |i| {
-                try module.emitF64Const(@floatFromInt(i));
-            } else {
-                return TranslateError.UnsupportedOpcode;
-            }
+            const i = val.asInteger();
+            try module.emitF64Const(@floatFromInt(i));
             try module.emit(.f64_sub);
         },
         .op_mul_local_const => {
@@ -394,11 +396,8 @@ fn translateInstruction(
             const const_idx = packed_operand & 0xFF;
             try module.emitLocalGet(local_slot);
             const val = chunk.constants[const_idx];
-            if (val.asInteger()) |i| {
-                try module.emitF64Const(@floatFromInt(i));
-            } else {
-                return TranslateError.UnsupportedOpcode;
-            }
+            const i = val.asInteger();
+            try module.emitF64Const(@floatFromInt(i));
             try module.emit(.f64_mul);
         },
         .op_lt_local_const => {
@@ -407,11 +406,8 @@ fn translateInstruction(
             const const_idx = packed_operand & 0xFF;
             try module.emitLocalGet(local_slot);
             const val = chunk.constants[const_idx];
-            if (val.asInteger()) |i| {
-                try module.emitF64Const(@floatFromInt(i));
-            } else {
-                return TranslateError.UnsupportedOpcode;
-            }
+            const i = val.asInteger();
+            try module.emitF64Const(@floatFromInt(i));
             try module.emit(.f64_lt);
         },
         .op_le_local_const,
@@ -452,6 +448,27 @@ fn translateInstruction(
             // 需要 block + br_if
             return TranslateError.UnsupportedOpcode;
         },
+
+        // ===== 新增操作碼 (Phase 14+) =====
+        .op_recur_loop,
+        .op_mod,
+        .op_rem,
+        .op_quot,
+        .op_mod_local_const,
+        .op_rem_local_const,
+        .op_quot_local_const,
+        .op_mod_locals,
+        .op_rem_locals,
+        .op_quot_locals,
+        .op_ne,
+        .op_ne_local_const,
+        .op_ne_locals,
+        .op_get,
+        .op_nth,
+        .op_nth2,
+        .op_var_meta => {
+            return TranslateError.UnsupportedOpcode;
+        },
     }
 }
 
@@ -460,24 +477,24 @@ test "translate: simple constant" {
     const allocator = testing.allocator;
 
     // 構造簡單嘅 BytecodeChunk: [op_const 0, op_ret]
-    var instructions = std.ArrayList(opcode_mod.Instruction).init(allocator);
-    defer instructions.deinit();
-    try instructions.append(.{ .op = .op_const, .operand = 0, .loc = null });
-    try instructions.append(.{ .op = .op_ret, .operand = 0, .loc = null });
+    var instructions: std.ArrayList(opcode_mod.WireInstr) = .empty;
+    defer instructions.deinit(allocator);
+    try instructions.append(allocator, .{ .opcode = .op_const, .operand = 0 });
+    try instructions.append(allocator, .{ .opcode = .op_ret, .operand = 0 });
 
-    var constants = std.ArrayList(Value).init(allocator);
-    defer constants.deinit();
-    try constants.append(Value.initInteger(42));
+    var constants: std.ArrayList(Value) = .empty;
+    defer constants.deinit(allocator);
+    try constants.append(allocator, Value.initInteger(42));
 
     const chunk = BytecodeChunk{
-        .instructions = try instructions.toOwnedSlice(),
-        .constants = try constants.toOwnedSlice(),
+        .instructions = try instructions.toOwnedSlice(allocator),
+        .constants = try constants.toOwnedSlice(allocator),
         .call_sites = &[_]opcode_mod.CallSiteEntry{},
         .libspecs = &[_]opcode_mod.LibspecEntry{},
         .ns_filters = &[_]opcode_mod.NsFilterEntry{},
         .ctor_sites = &[_]opcode_mod.CtorEntry{},
         .import_sites = &[_]opcode_mod.ImportPair{},
-        .source_file = null,
+        .source_file = "",
     };
     defer {
         allocator.free(chunk.instructions);
