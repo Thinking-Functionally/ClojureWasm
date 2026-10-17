@@ -156,15 +156,21 @@ fn translateInstruction(
         // ===== 基礎指令 =====
         .op_const => {
             const val = chunk.constants[instr.operand];
-            // 只處理數字 Value（簡化 Phase 3 實現）
-            // Value is enum(u64), check with @intFromEnum
+            // Value is enum(u64), check tag via top16 bits
             const val_int = @intFromEnum(val);
-            const is_integer = (val_int & 0xFFF8000000000000) == 0x0000000000000000;
-            if (is_integer) {
+            const top16: u16 = @truncate(val_int >> 48);
+
+            // 0xFFFC = integer, 0xFFF8-0xFFFB = heap types, < 0xFFF8 = raw f64
+            if (top16 == 0xFFFC) {
+                // Integer: extract i48 and convert to f64
                 const i = val.asInteger();
                 try module.emitF64Const(@floatFromInt(i));
+            } else if (top16 < 0xFFF8) {
+                // Raw f64: extract and emit
+                const f = val.asFloat();
+                try module.emitF64Const(f);
             } else {
-                // 其他類型（字串、符號、集合）需要 runtime object support
+                // Heap type / constant / char / builtin_fn not yet supported
                 return TranslateError.UnsupportedOpcode;
             }
         },
