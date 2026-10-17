@@ -13,11 +13,6 @@ pub const CompileError = error{
     TypeMismatch,
 } || edn.ParseError || std.mem.Allocator.Error;
 
-const BlockInfo = struct {
-    id: []const u8,
-    wasm_depth: u32, // Depth in WASM block nesting
-};
-
 /// Compile IR (EDN string) to WASM module
 pub fn compile(allocator: std.mem.Allocator, ir_edn: []const u8) CompileError!wasm.WasmModule {
     var ir = try edn.parse(allocator, ir_edn);

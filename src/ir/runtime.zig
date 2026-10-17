@@ -7,9 +7,9 @@
 // - 直接委派 Builtin 調用
 
 const std = @import("std");
-const Value = @import("../runtime/value.zig").Value;
+const Value = @import("../runtime/value/value.zig").Value;
 const Runtime = @import("../runtime/runtime.zig").Runtime;
-const treewalk_builtins = @import("../eval/treewalk/builtins.zig");
+const dispatch = @import("../runtime/dispatch.zig");
 
 /// IR Backend Runtime
 ///
@@ -24,14 +24,14 @@ pub const IRRuntime = struct {
 
     /// 調用 Builtin 函數
     ///
-    /// 直接委派給 TreeWalk builtins.dispatch，零重複實現
+    /// 直接委派給 dispatch.dispatch，零重複實現
     pub fn callBuiltin(
         self: *IRRuntime,
         name: []const u8,
         args: []const Value,
     ) !Value {
-        // 直接委派給 TreeWalk builtin dispatch
-        return treewalk_builtins.dispatch(self.rt, name, args);
+        // 直接委派給 dispatch
+        return dispatch.dispatch(self.rt, name, args);
     }
 
     /// 調用一般函數 (閉包、用戶定義函數)
@@ -70,31 +70,35 @@ const testing = std.testing;
 
 test "IRRuntime calls TreeWalk builtins - arithmetic" {
     const alloc = testing.allocator;
-    var rt = try Runtime.init(alloc, .{});
+    var th = std.Io.Threaded.init(alloc, .{});
+    defer th.deinit();
+    var rt = Runtime.init(th.io(), alloc);
     defer rt.deinit();
 
     var ir_rt = IRRuntime.init(&rt);
 
     // Test: + (加法)
     {
-        const v1 = Value.fromI64(1);
-        const v2 = Value.fromI64(2);
+        const v1 = Value.initInteger(1);
+        const v2 = Value.initInteger(2);
         const result = try ir_rt.callBuiltin("+", &[_]Value{ v1, v2 });
-        try testing.expectEqual(@as(i64, 3), result.asI64());
+        try testing.expectEqual(@as(i48, 3), result.asInteger());
     }
 
     // Test: - (減法)
     {
-        const v1 = Value.fromI64(10);
-        const v2 = Value.fromI64(5);
+        const v1 = Value.initInteger(10);
+        const v2 = Value.initInteger(5);
         const result = try ir_rt.callBuiltin("-", &[_]Value{ v1, v2 });
-        try testing.expectEqual(@as(i64, 5), result.asI64());
+        try testing.expectEqual(@as(i48, 5), result.asInteger());
     }
 }
 
 test "IRRuntime - unknown builtin error" {
     const alloc = testing.allocator;
-    var rt = try Runtime.init(alloc, .{});
+    var th = std.Io.Threaded.init(alloc, .{});
+    defer th.deinit();
+    var rt = Runtime.init(th.io(), alloc);
     defer rt.deinit();
 
     var ir_rt = IRRuntime.init(&rt);

@@ -98,7 +98,7 @@ pub fn main(init: std.process.Init) !void {
     const node = try Analyzer.analyze(arena_alloc, &rt, &env, &scope, form, &macro_table);
 
     // Compile Node → IR
-    var ctx = ir_codegen.CompileContext{ .allocator = arena_alloc };
+    var ctx = ir_codegen.CompileContext.init(arena_alloc);
     defer ctx.deinit();
     const ir_value = try ir_codegen.compileNode(&ctx, node);
 
@@ -127,36 +127,4 @@ fn printUsage(io: std.Io) !void {
         \\
     );
     try stderr.flush();
-}
-
-fn printFunctionIR(func: *const ir_codegen.FunctionIR, writer: anytype) !void {
-    try writer.print("{{:id \"{s}\"\n", .{func.id});
-    if (func.name) |name| {
-        try writer.print(" :name \"{s}\"\n", .{name});
-    }
-    try writer.print(" :arity ", .{});
-    switch (func.arity) {
-        .fixed => |n| try writer.print("{{:fixed {d}}}\n", .{n}),
-        .variadic => |v| try writer.print("{{:variadic {{:required {d}}}}}\n", .{v.required}),
-    }
-
-    try writer.print(" :params [", .{});
-    for (func.params, 0..) |param, i| {
-        if (i > 0) try writer.print(" ", .{});
-        try writer.print(":{s}", .{param});
-    }
-    try writer.print("]\n", .{});
-
-    if (func.captures.len > 0) {
-        try writer.print(" :captures [", .{});
-        for (func.captures, 0..) |cap, i| {
-            if (i > 0) try writer.print(" ", .{});
-            try writer.print(":{s}", .{cap});
-        }
-        try writer.print("]\n", .{});
-    }
-
-    try writer.print(" :entry {}\n", .{func.entry_block});
-    try writer.print(" :blocks []\n", .{}); // Simplified for Phase 1
-    try writer.print("}}\n", .{});
 }

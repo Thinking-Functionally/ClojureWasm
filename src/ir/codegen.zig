@@ -283,7 +283,6 @@ pub fn compileNode(ctx: *CompileContext, node: *const Node) CompileError!IRValue
     };
 }
 
-
 /// Compile CallNode → IR :call instruction
 ///
 /// Maps TreeWalk evalCall (line 1172-1198):
@@ -645,10 +644,7 @@ fn compileLoopNode(ctx: *CompileContext, loop_node: node_mod.LoopNode) !IRValueI
     _ = entry_block;
 
     // 2. Evaluate initial binding values
-    var init_vals = try std.ArrayList(IRValueID).initCapacity(
-        ctx.allocator,
-        loop_node.bindings.len
-    );
+    var init_vals = try std.ArrayList(IRValueID).initCapacity(ctx.allocator, loop_node.bindings.len);
     defer init_vals.deinit(ctx.allocator);
 
     for (loop_node.bindings) |binding| {
@@ -662,10 +658,7 @@ fn compileLoopNode(ctx: *CompileContext, loop_node: node_mod.LoopNode) !IRValueI
 
     // 4. Generate phi nodes for each binding
     // Each phi node merges initial value (from entry) and recur value (from back-edge)
-    var phi_results = try std.ArrayList(IRValueID).initCapacity(
-        ctx.allocator,
-        loop_node.bindings.len
-    );
+    var phi_results = try std.ArrayList(IRValueID).initCapacity(ctx.allocator, loop_node.bindings.len);
     defer phi_results.deinit(ctx.allocator);
 
     for (loop_node.bindings, 0..) |binding, i| {
@@ -704,10 +697,7 @@ fn compileLoopNode(ctx: *CompileContext, loop_node: node_mod.LoopNode) !IRValueI
 /// ```
 fn compileRecurNode(ctx: *CompileContext, recur: node_mod.RecurNode) !IRValueID {
     // 1. Evaluate all recur arguments
-    var arg_vals = try std.ArrayList(IRValueID).initCapacity(
-        ctx.allocator,
-        recur.args.len
-    );
+    var arg_vals = try std.ArrayList(IRValueID).initCapacity(ctx.allocator, recur.args.len);
     defer arg_vals.deinit(ctx.allocator);
 
     for (recur.args) |*arg| {
@@ -756,17 +746,12 @@ fn compileTryNode(ctx: *CompileContext, try_node: node_mod.TryNode) !IRValueID {
     const try_result = try compileNode(ctx, try_node.body);
 
     // 3. Create catch handler blocks
-    var catch_blocks = try std.ArrayList(IRValueID).initCapacity(
-        ctx.allocator,
-        try_node.catch_clauses.len
-    );
+    var catch_blocks = try std.ArrayList(IRValueID).initCapacity(ctx.allocator, try_node.catch_clauses.len);
     defer catch_blocks.deinit(ctx.allocator);
 
     for (try_node.catch_clauses, 0..) |clause, i| {
         _ = clause;
-        const catch_block = try ctx.freshBlockID(
-            try std.fmt.allocPrint(ctx.allocator, "catch_{d}", .{i})
-        );
+        const catch_block = try ctx.freshBlockID(try std.fmt.allocPrint(ctx.allocator, "catch_{d}", .{i}));
         try catch_blocks.append(ctx.allocator, catch_block);
 
         // Each catch clause has:

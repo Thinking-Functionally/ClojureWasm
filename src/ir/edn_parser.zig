@@ -429,4 +429,3 @@ test "error on invalid keyword" {
     const result = parse(std.testing.allocator, source);
     try std.testing.expectError(error.InvalidKeyword, result);
 }
-

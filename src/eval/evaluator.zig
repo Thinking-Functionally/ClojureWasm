@@ -31,14 +31,18 @@ const Value = @import("../runtime/value/value.zig").Value;
 const tree_walk = @import("backend/tree_walk.zig");
 const vm = @import("backend/vm.zig");
 const vm_compiler = @import("backend/vm/compiler.zig");
+const ir_codegen = @import("../ir/codegen.zig");
+const ir_eval = @import("../ir/eval.zig");
 const driver = @import("driver.zig");
 
 pub const CompareResult = struct {
     tree_walk: anyerror!Value,
     vm: anyerror!Value,
-    /// `true` when both backends succeeded AND produced the same
-    /// NaN-boxed bit pattern. See module docstring for the
-    /// immediate-Value caveat.
+    ir: anyerror!Value,
+    /// `true` when TreeWalk and VM backends succeeded AND produced the same
+    /// NaN-boxed bit pattern. IR is an additional check but does not affect
+    /// this flag (Phase 2: IR backend is not yet complete).
+    /// See module docstring for the immediate-Value caveat.
     equal: bool,
 };
 
@@ -55,15 +59,21 @@ pub fn compare(
     vm.installVTable(rt);
     const vm_value = runOnce(rt, env, table, arena, source, .vm);
 
+    // IR backend: no vtable installation needed (uses codegen + eval directly)
+    // Phase 2: IR backend is work-in-progress, errors are expected
+    const ir_value = runOnce(rt, env, table, arena, source, .ir);
+
+    // Phase 2: `equal` compares only TreeWalk ↔ VM (the F-012 dual-backend oracle)
+    // IR is an additional check but does not affect the gate
     const equal = blk: {
         const tw = tw_value catch break :blk false;
         const vm_v = vm_value catch break :blk false;
         break :blk @intFromEnum(tw) == @intFromEnum(vm_v);
     };
-    return .{ .tree_walk = tw_value, .vm = vm_value, .equal = equal };
+    return .{ .tree_walk = tw_value, .vm = vm_value, .ir = ir_value, .equal = equal };
 }
 
-const BackendChoice = enum { tree_walk, vm };
+const BackendChoice = enum { tree_walk, vm, ir };
 
 fn runOnce(
     rt: *Runtime,
@@ -125,6 +135,18 @@ fn evalTopLevelInBackend(
         .vm => blk: {
             const chunk = try vm_compiler.compile(rt, arena, node);
             break :blk vm.eval(rt, env, &locals, &chunk);
+        },
+        .ir => blk: {
+            // IR backend: compile node to IR, then evaluate
+            var compile_ctx = ir_codegen.CompileContext.init(arena);
+            defer compile_ctx.deinit();
+
+            const ir_value_id = try ir_codegen.compileNode(&compile_ctx, node);
+
+            var eval_ctx = ir_eval.EvalContext.init(arena, rt, env, &compile_ctx.constants);
+            defer eval_ctx.deinit();
+
+            break :blk eval_ctx.eval(ir_value_id);
         },
     };
 }

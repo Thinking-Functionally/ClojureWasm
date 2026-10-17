@@ -92,6 +92,9 @@ pub const WasmOp = enum(u8) {
     // Variables
     local_get = 0x20,
     local_set = 0x21,
+    local_tee = 0x22,
+    // Stack
+    drop = 0x1A,
     // Numeric
     i32_trunc_f64_s = 0xAA,
     f64_const = 0x44,
@@ -146,14 +149,14 @@ fn translateInstruction(
     instr: opcode_mod.Instruction,
 ) TranslateError!void {
     switch (instr.op) {
+        // ===== 基礎指令 =====
         .op_const => {
-            // 將 constant pool 中嘅 Value 轉成 Wasm const
             const val = chunk.constants[instr.operand];
-            // Phase 3 簡化：只處理數字
+            // 只處理數字 Value（簡化 Phase 3 實現）
             if (val.asInteger()) |i| {
                 try module.emitF64Const(@floatFromInt(i));
             } else {
-                // 其他類型暫時唔支援
+                // 其他類型（字串、符號、集合）需要 runtime object support
                 return TranslateError.UnsupportedOpcode;
             }
         },
@@ -163,38 +166,290 @@ fn translateInstruction(
         .op_store_local => {
             try module.emitLocalSet(@as(u32, instr.operand));
         },
-        .op_call => {
-            // Phase 3 簡化：假設 builtin 函數已經喺 Wasm import table
-            const arg_count = instr.operand;
-            _ = arg_count;
-            // TODO: 根據 builtin 名稱決定調用邊個 Wasm import
-            return TranslateError.UnsupportedOpcode;
-        },
-        .op_invoke_builtin => {
-            // Builtin 函數調用：需要 runtime support
-            return TranslateError.UnsupportedOpcode;
-        },
         .op_ret => {
             try module.emit(.return_op);
         },
         .op_pop => {
-            // Wasm 係 stack-based，pop 通常已經隱含喺指令入面
-            // 如果真係需要丟棄值，可以用 local.set 到 dummy local
+            // Wasm stack-based: 用 drop 指令丟棄
+            try module.emit(.drop);
         },
         .op_dup => {
-            // Wasm 冇直接嘅 dup，需要 local.tee
+            // Wasm 冇 dup: 用 local.tee 模擬
+            // dup = local.tee $temp; local.get $temp
+            const temp_local = module.num_locals;
+            module.num_locals += 1;
+            try module.emit(.local_tee);
+            try module.emitLEB128(temp_local);
+            try module.emitLocalGet(temp_local);
+        },
+
+        // ===== 函數調用 =====
+        .op_call => {
+            // 通用函數調用: 需要 function table + 動態 dispatch
+            const arg_count = instr.operand;
+            _ = arg_count;
+            // Phase 3: 延遲實現（需要 Wasm function table）
             return TranslateError.UnsupportedOpcode;
         },
+        .op_invoke_builtin => {
+            // Builtin 調用: 映射到 Wasm import
+            const arg_count = instr.operand;
+            _ = arg_count;
+            // Phase 3: 延遲實現（需要 builtin name 到 import index 映射）
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_make_fn => {
+            // 創建閉包: 需要 heap allocation
+            return TranslateError.UnsupportedOpcode;
+        },
+
+        // ===== 控制流 =====
         .op_jump => {
-            // 需要 block/loop 結構支援
+            // 無條件跳轉: 用 br 指令
+            const offset = @as(i16, @bitCast(@as(u16, instr.operand)));
+            _ = offset;
+            // Phase 3: 需要 block 結構 + label 映射
             return TranslateError.UnsupportedOpcode;
         },
         .op_jump_if_false => {
-            // 需要 if/else 結構
+            // 條件跳轉: 用 br_if 指令
+            const offset = @as(i16, @bitCast(@as(u16, instr.operand)));
+            _ = offset;
+            // Phase 3: 需要 block 結構 + label 映射
             return TranslateError.UnsupportedOpcode;
         },
-        else => {
-            // Phase 3.1 只支援最基本嘅 opcode
+        .op_recur => {
+            // 尾遞迴: 需要 loop + br 到 loop 頂部
+            return TranslateError.UnsupportedOpcode;
+        },
+
+        // ===== 變量定義 =====
+        .op_def => {
+            // (def x v): 需要 namespace + Var runtime
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_def_unbound => {
+            // (def x): 同上
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_get_var => {
+            // 讀取 Var: 需要 Var deref runtime
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_set_var => {
+            // set! Var: 需要 Var set! runtime
+            return TranslateError.UnsupportedOpcode;
+        },
+
+        // ===== 異常處理 =====
+        .op_throw => {
+            // throw: 用 Wasm exception handling proposal
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_push_handler => {
+            // try/catch: 用 Wasm try/catch
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_pop_handler => {
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_match_class => {
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_match_type_keyword => {
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_push_cleanup => {
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_reraise => {
+            return TranslateError.UnsupportedOpcode;
+        },
+
+        // ===== 命名空間 =====
+        .op_in_ns => {
+            // (in-ns 'foo): 需要 namespace runtime
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_ns_with_refer_clojure => {
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_ns_with_filter => {
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_require => {
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_require_with_libspec => {
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_ns_import => {
+            return TranslateError.UnsupportedOpcode;
+        },
+
+        // ===== 數據結構 =====
+        .op_vector_literal => {
+            // [1 2 3]: 需要 vector runtime
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_map_literal => {
+            // {:a 1}: 需要 map runtime
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_set_literal => {
+            // #{1 2}: 需要 set runtime
+            return TranslateError.UnsupportedOpcode;
+        },
+
+        // ===== 方法調用 (deftype/reify) =====
+        .op_ctor_call => {
+            // (Name. args): 需要 deftype runtime
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_method_call => {
+            // (.method obj args): 需要 protocol dispatch
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_static_method_call => {
+            // (Class/method args): 需要 static dispatch
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_set_field => {
+            // (set! (.field obj) v): 需要 deftype mutable field
+            return TranslateError.UnsupportedOpcode;
+        },
+
+        // ===== 動態綁定 =====
+        .op_push_binding_frame => {
+            // (binding [*v* x]): 需要 dynamic var runtime
+            return TranslateError.UnsupportedOpcode;
+        },
+        .op_pop_binding_frame => {
+            return TranslateError.UnsupportedOpcode;
+        },
+
+        // ===== letfn =====
+        .op_letfn_patch => {
+            // letfn 閉包補丁: 需要 closure heap 操作
+            return TranslateError.UnsupportedOpcode;
+        },
+
+        // ===== 算術內聯優化 (ADR-0130) =====
+        .op_add => {
+            // (+ a b): f64.add
+            try module.emit(.f64_add);
+        },
+        .op_sub => {
+            try module.emit(.f64_sub);
+        },
+        .op_mul => {
+            try module.emit(.f64_mul);
+        },
+        .op_lt => {
+            try module.emit(.f64_lt);
+        },
+        .op_le => {
+            try module.emit(.f64_le);
+        },
+        .op_gt => {
+            try module.emit(.f64_gt);
+        },
+        .op_ge => {
+            try module.emit(.f64_ge);
+        },
+        .op_eq => {
+            try module.emit(.f64_eq);
+        },
+
+        // ===== 超指令 (local+const 融合) =====
+        .op_add_local_const => {
+            const packed = instr.operand;
+            const local_slot = (packed >> 8) & 0xFF;
+            const const_idx = packed & 0xFF;
+            try module.emitLocalGet(local_slot);
+            const val = chunk.constants[const_idx];
+            if (val.asInteger()) |i| {
+                try module.emitF64Const(@floatFromInt(i));
+            } else {
+                return TranslateError.UnsupportedOpcode;
+            }
+            try module.emit(.f64_add);
+        },
+        .op_sub_local_const => {
+            const packed = instr.operand;
+            const local_slot = (packed >> 8) & 0xFF;
+            const const_idx = packed & 0xFF;
+            try module.emitLocalGet(local_slot);
+            const val = chunk.constants[const_idx];
+            if (val.asInteger()) |i| {
+                try module.emitF64Const(@floatFromInt(i));
+            } else {
+                return TranslateError.UnsupportedOpcode;
+            }
+            try module.emit(.f64_sub);
+        },
+        .op_mul_local_const => {
+            const packed = instr.operand;
+            const local_slot = (packed >> 8) & 0xFF;
+            const const_idx = packed & 0xFF;
+            try module.emitLocalGet(local_slot);
+            const val = chunk.constants[const_idx];
+            if (val.asInteger()) |i| {
+                try module.emitF64Const(@floatFromInt(i));
+            } else {
+                return TranslateError.UnsupportedOpcode;
+            }
+            try module.emit(.f64_mul);
+        },
+        .op_lt_local_const => {
+            const packed = instr.operand;
+            const local_slot = (packed >> 8) & 0xFF;
+            const const_idx = packed & 0xFF;
+            try module.emitLocalGet(local_slot);
+            const val = chunk.constants[const_idx];
+            if (val.asInteger()) |i| {
+                try module.emitF64Const(@floatFromInt(i));
+            } else {
+                return TranslateError.UnsupportedOpcode;
+            }
+            try module.emit(.f64_lt);
+        },
+        .op_le_local_const,
+        .op_gt_local_const,
+        .op_ge_local_const,
+        .op_eq_local_const => {
+            // 同上模式
+            return TranslateError.UnsupportedOpcode;
+        },
+
+        // ===== 超指令 (local+local 融合) =====
+        .op_add_locals => {
+            const operand_packed = instr.operand;
+            const slot_a = (operand_packed >> 8) & 0xFF;
+            const slot_b = operand_packed & 0xFF;
+            try module.emitLocalGet(slot_a);
+            try module.emitLocalGet(slot_b);
+            try module.emit(.f64_add);
+        },
+        .op_sub_locals,
+        .op_mul_locals,
+        .op_lt_locals,
+        .op_le_locals,
+        .op_gt_locals,
+        .op_ge_locals,
+        .op_eq_locals => {
+            // 同上模式
+            return TranslateError.UnsupportedOpcode;
+        },
+
+        // ===== 分支超指令 (比較+跳轉融合) =====
+        .op_branch_ne_local_const,
+        .op_branch_ge_local_const,
+        .op_branch_gt_local_const,
+        .op_branch_ne_locals,
+        .op_branch_ge_locals,
+        .op_branch_gt_locals => {
+            // 需要 block + br_if
             return TranslateError.UnsupportedOpcode;
         },
     }

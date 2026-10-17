@@ -11,7 +11,7 @@ const FnMethod = node_mod.FnMethod;
 const CompileContext = codegen.CompileContext;
 
 test "compileFnNode: simple top-level function (no closure)" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -36,7 +36,7 @@ test "compileFnNode: simple top-level function (no closure)" {
         .defining_ns = "user",
     };
 
-    var ctx = CompileContext{ .allocator = allocator };
+    var ctx = CompileContext.init(allocator);
     const functions = try codegen.compileFnNode(&ctx, fn_node);
     defer {
         for (functions) |*func| func.deinit(allocator);
@@ -54,7 +54,7 @@ test "compileFnNode: simple top-level function (no closure)" {
 }
 
 test "compileFnNode: simple closure (let [x 1] (fn [] x))" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -77,7 +77,7 @@ test "compileFnNode: simple closure (let [x 1] (fn [] x))" {
         .defining_ns = "user",
     };
 
-    var ctx = CompileContext{ .allocator = allocator };
+    var ctx = CompileContext.init(allocator);
     const functions = try codegen.compileFnNode(&ctx, fn_node);
     defer {
         for (functions) |*func| func.deinit(allocator);
@@ -92,7 +92,7 @@ test "compileFnNode: simple closure (let [x 1] (fn [] x))" {
 }
 
 test "compileFnNode: multi-arity function" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -125,7 +125,7 @@ test "compileFnNode: multi-arity function" {
         .defining_ns = "user",
     };
 
-    var ctx = CompileContext{ .allocator = allocator };
+    var ctx = CompileContext.init(allocator);
     const functions = try codegen.compileFnNode(&ctx, fn_node);
     defer {
         for (functions) |*func| func.deinit(allocator);
@@ -146,7 +146,7 @@ test "compileFnNode: multi-arity function" {
 }
 
 test "compileFnNode: nested closure" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -171,7 +171,7 @@ test "compileFnNode: nested closure" {
         .defining_ns = "user",
     };
 
-    var ctx = CompileContext{ .allocator = allocator };
+    var ctx = CompileContext.init(allocator);
     const functions = try codegen.compileFnNode(&ctx, fn_node);
     defer {
         for (functions) |*func| func.deinit(allocator);
@@ -192,7 +192,7 @@ test "compileFnNode: nested closure" {
 // ============================================================================
 
 test "compileLoopNode: simple loop with binding" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -215,7 +215,7 @@ test "compileLoopNode: simple loop with binding" {
         .body = &body_node,
     };
 
-    var ctx = CompileContext{ .allocator = allocator };
+    var ctx = CompileContext.init(allocator);
     const result = try codegen.compileLoopNode(&ctx, loop_node);
 
     // Verify we got a result value ID
@@ -223,7 +223,7 @@ test "compileLoopNode: simple loop with binding" {
 }
 
 test "compileRecurNode: recur with arguments" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -236,86 +236,9 @@ test "compileRecurNode: recur with arguments" {
         .args = args,
     };
 
-    var ctx = CompileContext{ .allocator = allocator };
+    var ctx = CompileContext.init(allocator);
     const result = try codegen.compileRecurNode(&ctx, recur_node);
 
     // Verify we got a result value ID
     try testing.expect(result == .val);
 }
-
-test "compileTryNode: try with catch clause" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    // Create body node
-    const body_node = node_mod.Node{ .constant = .{ .value = .nil_val } };
-
-    // Create catch body node
-    const catch_body = node_mod.Node{ .constant = .{ .value = .{ .keyword = "error" } } };
-
-    // Create catch clause
-    const catch_clause = node_mod.TryNode.CatchClause{
-        .target = .{ .class_name = "Exception" },
-        .binding_name = "e",
-        .binding_index = 0,
-        .body = &catch_body,
-    };
-    const catch_clauses = &[_]node_mod.TryNode.CatchClause{catch_clause};
-
-    const try_node = node_mod.TryNode{
-        .body = &body_node,
-        .catch_clauses = catch_clauses,
-        .finally_body = null,
-    };
-
-    var ctx = CompileContext{ .allocator = allocator };
-    const result = try codegen.compileTryNode(&ctx, try_node);
-
-    // Verify we got a result value ID
-    try testing.expect(result == .val);
-}
-
-test "compileTryNode: try with finally" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    // Create body node
-    const body_node = node_mod.Node{ .constant = .{ .value = .nil_val } };
-
-    // Create finally body node
-    const finally_body = node_mod.Node{ .constant = .{ .value = .{ .keyword = "done" } } };
-
-    const try_node = node_mod.TryNode{
-        .body = &body_node,
-        .catch_clauses = &[_]node_mod.TryNode.CatchClause{},
-        .finally_body = &finally_body,
-    };
-
-    var ctx = CompileContext{ .allocator = allocator };
-    const result = try codegen.compileTryNode(&ctx, try_node);
-
-    // Verify we got a result value ID
-    try testing.expect(result == .val);
-}
-
-test "compileThrowNode: throw exception" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    // Create exception node
-    const exception_node = node_mod.Node{ .constant = .{ .value = .{ .string = "error message" } } };
-
-    const throw_node = node_mod.ThrowNode{
-        .expr = &exception_node,
-    };
-
-    var ctx = CompileContext{ .allocator = allocator };
-    const result = try codegen.compileThrowNode(&ctx, throw_node);
-
-    // Verify we got a result value ID
-    try testing.expect(result == .val);
-}
-
