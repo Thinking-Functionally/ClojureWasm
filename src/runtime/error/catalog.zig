@@ -446,6 +446,8 @@ pub const Code = enum {
     /// per-trap-kind 1:1 map (div0→arithmetic, OOB→index, …) is Phase-16
     /// (the zwasm Trap trap_map, ADR-0099).
     wasm_trap,
+    /// Phase 3 PoC: Invalid Wasm magic number
+    invalid_wasm_magic,
     /// The `wasm_*` surface taxonomy (FIX-4): every `wasm/load` + `wasm/call`
     /// error is a CATCHABLE cljw exception (a request-derived bad arg or a
     /// faulty module on an edge request must not end the whole process). Each
@@ -1633,6 +1635,11 @@ pub fn entry(comptime code: Code) Entry {
             .kind = .value_error,
             .phase = .eval,
             .template = "WebAssembly module trapped (e.g. divide-by-zero, out-of-bounds, or an unreachable instruction)",
+        },
+        .invalid_wasm_magic => .{
+            .kind = .value_error,
+            .phase = .eval,
+            .template = "wasm/load-bytes: invalid WebAssembly magic number (expected \\x00asm)",
         },
         .wasm_path_invalid => .{
             .kind = .type_error,

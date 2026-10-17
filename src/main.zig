@@ -152,6 +152,7 @@ test {
     _ = @import("ir/edn_parser.zig");
     _ = @import("ir/minimal_backend.zig");
     _ = @import("eval/backend/bytecode_to_wasm.zig");
+    _ = @import("eval/backend/wasm_module_builder.zig");
     _ = @import("lang/primitive/error.zig");
     _ = @import("lang/primitive/transient.zig");
     _ = @import("lang/primitive/edn.zig");
