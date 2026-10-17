@@ -35,6 +35,15 @@ const GcHeap = gc_heap_mod.GcHeap;
 const TypeDescriptor = td_mod.TypeDescriptor;
 const SourceContext = print_mod.SourceContext;
 
+/// Evaluation backend selection (runtime-selectable in Phase 1 Wasm integration).
+/// Defined in runtime.zig (Layer 0) so both the main executable and cache_gen
+/// can reference it without depending on build_options (build-time only module).
+pub const Backend = enum {
+    tree_walk,
+    vm,
+    wasm,
+};
+
 /// Resolver signature for `require`. Given a namespace name like
 /// `"clojure.set"`, return the namespace's source text or `null` if
 /// the resolver cannot find it (= `lib_not_found` raise). Bootstrap
@@ -221,6 +230,11 @@ pub const Runtime = struct {
     /// `fn*` does NOT perturb syntax-quote / `foo#` gensym numbers (which
     /// some macro tests pin). Per-Runtime, like `gensym_counter`.
     fn_name_counter: u64 = 0,
+
+    /// Runtime-selected evaluation backend (Phase 1 Wasm integration).
+    /// Defaults to `.vm` (bytecode); CLI `--backend=wasm` sets `.wasm`.
+    /// Supersedes compile-time `build_options.backend` for runtime selection.
+    backend: Backend = .vm,
 
     /// Non-GC heap-object pool. Each registered Layer-1+ allocation
     /// adds a `(ptr, free_fn)` pair here so `Runtime.deinit` can

@@ -63,13 +63,15 @@ pub const WasmModuleBuilder = struct {
         try self.writeTypeSection(&module);
 
         // Import section: builtin functions (Tier 2)
-        try self.writeImportSection(&module, chunk);
+        // Phase 1: 跳過 import section（測試用例唔需要）
+        // try self.writeImportSection(&module, chunk);
 
         // Function section: 函數使用嘅類型
         try self.writeFunctionSection(&module);
 
         // Table section: function table for indirect calls (Tier 2)
-        try self.writeTableSection(&module);
+        // Phase 1: 跳過 table section（測試用例唔需要）
+        // try self.writeTableSection(&module);
 
         // Export section: 導出 "main" 函數
         try self.writeExportSection(&module);
@@ -196,7 +198,7 @@ pub const WasmModuleBuilder = struct {
 
         // 導出類型: 函數
         try payload.append(self.allocator, 0x00);
-        // 函數索引 0
+        // 函數索引 0 (Phase 1: 無 import section，所以本地函數從 0 開始)
         try self.writeLEB128(&payload, 0);
 
         try self.writeLEB128(module, @intCast(payload.items.len));
@@ -303,7 +305,7 @@ pub const WasmModuleBuilder = struct {
                     const depth = block_stack.computeBranchDepth(target_label) orelse return BuildError.UnsupportedOpcode;
 
                     // i32.eqz (f64 → i32 cast + eqz)
-                    try code.append(self.allocator, 0xB2); // i32.trunc_f64_s
+                    try code.append(self.allocator, 0xAA); // i32.trunc_f64_s
                     try code.append(self.allocator, 0x45); // i32.eqz
                     // br_if <depth>
                     try code.append(self.allocator, 0x0D); // br_if
@@ -359,17 +361,26 @@ pub const WasmModuleBuilder = struct {
         switch (instr.opcode) {
             .op_const => {
                 const val = chunk.constants[instr.operand];
-                // Value is enum(u64), check with bit pattern
+                // Value is enum(u64), check tag via top16 bits
                 const val_int = @intFromEnum(val);
-                const is_integer = (val_int & 0xFFF8000000000000) == 0x0000000000000000;
-                if (is_integer) {
+                const top16: u16 = @truncate(val_int >> 48);
+
+                // 0xFFFC = integer, 0xFFF8-0xFFFB = heap types, < 0xFFF8 = raw f64
+                if (top16 == 0xFFFC) {
+                    // Integer: extract i48 and convert to f64
                     const i = val.asInteger();
-                    // f64.const
-                    try code.append(self.allocator, 0x44);
+                    try code.append(self.allocator, 0x44); // f64.const
                     const f: f64 = @floatFromInt(i);
                     const bytes = @as([8]u8, @bitCast(f));
                     try code.appendSlice(self.allocator, &bytes);
+                } else if (top16 < 0xFFF8) {
+                    // Raw f64: extract and emit
+                    const f = val.asFloat();
+                    try code.append(self.allocator, 0x44); // f64.const
+                    const bytes = @as([8]u8, @bitCast(f));
+                    try code.appendSlice(self.allocator, &bytes);
                 } else {
+                    // Heap type / constant / char / builtin_fn not yet supported
                     return BuildError.UnsupportedOpcode;
                 }
             },

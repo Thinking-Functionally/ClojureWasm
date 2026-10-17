@@ -35,6 +35,7 @@ const deps_run_mode = @import("deps/run_mode.zig");
 const error_print = @import("../runtime/error/print.zig");
 const build_options = @import("build_options");
 const startup_profile = @import("../runtime/startup_profile.zig");
+const runtime_mod = @import("../runtime/runtime.zig");
 
 /// Top-level CLI dispatcher. Called from `src/main.zig::main` with
 /// the Juicy-Main `std.process.Init` bundle. Parses argv, decides
@@ -306,6 +307,8 @@ fn dispatchArgsRest(
     var compare_mode: bool = false;
     var classpath_arg: ?[]const u8 = null;
     var alias_names: std.ArrayList([]const u8) = .empty;
+    // Phase 1 Wasm backend: runtime-selectable backend (defaults to .vm per build.zig)
+    var backend: runtime_mod.Backend = .vm;
     // `-M`/`-X` (or a bare top-level `-m`) switch from classpath-only to a
     // run mode (D-309). Once detected, every remaining token is a verbatim
     // run-arg (clojure.main / exec grammar), so the cljw flag loop stops.
@@ -365,6 +368,23 @@ fn dispatchArgsRest(
             return;
         } else if (std.mem.eql(u8, arg, "--compare")) {
             compare_mode = true;
+        } else if (std.mem.eql(u8, arg, "--backend")) {
+            const backend_str = args.next() orelse {
+                try stderr.print("Error: --backend requires an argument (tree_walk, vm, or wasm)\n", .{});
+                try stderr.flush();
+                std.process.exit(1);
+            };
+            if (std.mem.eql(u8, backend_str, "tree_walk")) {
+                backend = .tree_walk;
+            } else if (std.mem.eql(u8, backend_str, "vm")) {
+                backend = .vm;
+            } else if (std.mem.eql(u8, backend_str, "wasm")) {
+                backend = .wasm;
+            } else {
+                try stderr.print("Error: --backend must be 'tree_walk', 'vm', or 'wasm', got '{s}'\n", .{backend_str});
+                try stderr.flush();
+                std.process.exit(1);
+            }
         } else if (std.mem.eql(u8, arg, "-cp") or std.mem.eql(u8, arg, "--classpath")) {
             classpath_arg = args.next() orelse {
                 try stderr.print("Error: -cp / --classpath requires an argument\n", .{});
@@ -469,7 +489,7 @@ fn dispatchArgsRest(
     if (compare_mode) {
         try runner.runSourceCompare(io, gpa, arena, stdout, stderr, source_text.?, source_label);
     } else {
-        try runner.runSource(io, gpa, arena, stdout, stderr, source_text.?, source_label, deps.load_paths, print_results, fs_jail_root);
+        try runner.runSource(io, gpa, arena, stdout, stderr, source_text.?, source_label, deps.load_paths, print_results, fs_jail_root, backend);
     }
 }
 

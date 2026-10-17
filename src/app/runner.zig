@@ -19,7 +19,8 @@ const Reader = @import("../eval/reader.zig").Reader;
 const macro_dispatch = @import("../eval/macro_dispatch.zig");
 const driver = @import("../eval/driver.zig");
 const evaluator = @import("../eval/evaluator.zig");
-const Runtime = @import("../runtime/runtime.zig").Runtime;
+const runtime_mod = @import("../runtime/runtime.zig");
+const Runtime = runtime_mod.Runtime;
 const env_mod = @import("../runtime/env.zig");
 const Env = env_mod.Env;
 const string_collection = @import("../runtime/collection/string.zig");
@@ -56,6 +57,8 @@ pub fn runSource(
     /// Deploy-mode FS jail root (`CLJW_FS_ROOT`), or null for unconfined local
     /// CLI (ADR-0123 / SE-6/7). Confines slurp / spit / wasm/load to the subtree.
     fs_jail_root: ?[]const u8,
+    /// Backend selection (tree_walk, vm, or wasm). Default is vm.
+    backend: runtime_mod.Backend,
 ) !void {
     const ctx = error_print.SourceContext{ .file = source_label, .text = source_text };
 
@@ -67,6 +70,7 @@ pub fn runSource(
     // Route println/print/prn through the SAME writer as the result-print
     // below — one offset-tracking stdout writer per process (D-096).
     rt.stdout = stdout;
+    rt.backend = backend;
 
     var env = try Env.init(&rt);
     defer env.deinit();

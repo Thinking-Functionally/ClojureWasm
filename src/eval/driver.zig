@@ -16,6 +16,7 @@ const node_mod = @import("node.zig");
 const Node = node_mod.Node;
 const runtime_mod = @import("../runtime/runtime.zig");
 const Runtime = runtime_mod.Runtime;
+const Backend = runtime_mod.Backend;
 const env_mod = @import("../runtime/env.zig");
 const Env = env_mod.Env;
 const value_mod = @import("../runtime/value/value.zig");
@@ -88,25 +89,35 @@ pub fn evalForm(
     const saved_consult_env = dispatch.current_env;
     dispatch.current_env = env;
     defer dispatch.current_env = saved_consult_env;
-    if (comptime build_options.backend == .vm) {
-        const chunk = try vm_compiler.compile(rt, arena, node);
-        return vm.eval(rt, env, locals, &chunk);
-    } else {
-        // GC-ROOT: A6 — the TOP-LEVEL locals window on the tree_walk backend
-        // (vm.eval pushes its own A1 frame; tree_walk fn activations push per
-        // call, but a top-level `let`'s slots live in THIS caller-owned array
-        // and were otherwise invisible to a mid-eval collect — D-555).
-        var gc_stack: [1]Value = .{.nil_val};
-        var gc_sp: u16 = 0;
-        var gc_frame: root_set.EvalFrame = .{
-            .stack = &gc_stack,
-            .sp = &gc_sp,
-            .locals = locals,
-            .parent = root_set.eval_frame_head,
-        };
-        root_set.eval_frame_head = &gc_frame;
-        defer root_set.eval_frame_head = gc_frame.parent;
-        return tree_walk.eval(rt, env, locals, node);
+    switch (rt.backend) {
+        .vm => {
+            const chunk = try vm_compiler.compile(rt, arena, node);
+            return vm.eval(rt, env, locals, &chunk);
+        },
+        .wasm => {
+            const chunk = try vm_compiler.compile(rt, arena, node);
+            const WasmExecutor = @import("backend/wasm_executor.zig").WasmExecutor;
+            var executor = try WasmExecutor.init(arena);
+            defer executor.deinit();
+            return try executor.execute(chunk);
+        },
+        .tree_walk => {
+            // GC-ROOT: A6 — the TOP-LEVEL locals window on the tree_walk backend
+            // (vm.eval pushes its own A1 frame; tree_walk fn activations push per
+            // call, but a top-level `let`'s slots live in THIS caller-owned array
+            // and were otherwise invisible to a mid-eval collect — D-555).
+            var gc_stack: [1]Value = .{.nil_val};
+            var gc_sp: u16 = 0;
+            var gc_frame: root_set.EvalFrame = .{
+                .stack = &gc_stack,
+                .sp = &gc_sp,
+                .locals = locals,
+                .parent = root_set.eval_frame_head,
+            };
+            root_set.eval_frame_head = &gc_frame;
+            defer root_set.eval_frame_head = gc_frame.parent;
+            return tree_walk.eval(rt, env, locals, node);
+        },
     }
 }
 

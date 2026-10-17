@@ -63,7 +63,10 @@ pub const WasmExecutor = struct {
         var loaded = wasm_engine.load(self.allocator, wasm_bytes, .{}) catch {
             return ExecuteError.WasmLoadFailed;
         };
-        defer loaded.deinit();
+        defer {
+            loaded.deinit();
+            self.allocator.destroy(loaded);
+        }
 
         // Step 3: 執行 "main" 函數
         var results: [1]wasm_engine.Value = undefined;

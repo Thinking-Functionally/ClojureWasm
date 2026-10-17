@@ -64,7 +64,7 @@ pub fn build(b: *std.Build) void {
     // e2e green on vm). `tree_walk` is retained as the differential oracle /
     // reference implementation, selectable via `-Dbackend=tree_walk` (the
     // enum FIELD spelling — `-Dbackend=tree-walk` is rejected by zig build).
-    const Backend = enum { tree_walk, vm };
+    const Backend = enum { tree_walk, vm, wasm };
     const backend = b.option(Backend, "backend", "Evaluation backend (vm default — production; tree_walk = differential oracle)") orelse .vm;
     build_options.addOption(Backend, "backend", backend);
 
