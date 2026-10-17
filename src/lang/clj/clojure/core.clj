@@ -1290,11 +1290,11 @@
 ;; as the seed (≥1 arg required, matching JVM).
 (def max-key
   (fn* [f & xs]
-    (reduce (fn* [a b] (if (>= (f a) (f b)) a b)) xs)))
+    (reduce (fn* [a b] (if (>= (f b) (f a)) b a)) xs)))
 
 (def min-key
   (fn* [f & xs]
-    (reduce (fn* [a b] (if (<= (f a) (f b)) a b)) xs)))
+    (reduce (fn* [a b] (if (<= (f b) (f a)) b a)) xs)))
 
 ;; `(flatten coll)` — the contents of any nested sequential as a single
 ;; flat SEQUENCE (matches JVM: a lazy seq, not a vector). Non-sequential

@@ -1512,14 +1512,18 @@ const Entry = struct {
 /// dispatches to the active backend, so eval is backend-neutral. A top-level
 /// form has no enclosing locals; the transient arena holds the reconstructed
 /// form + node and is freed after (the result Value is GC-allocated, survives).
+/// `(eval form)` — evaluate a runtime data Value as code (ADR-0058 / D-197).
+/// Delegates to `driver.evalValue` (valueToForm → analyze → evalForm), which
+/// dispatches to the active backend, so eval is backend-neutral. A top-level
+/// form has no enclosing locals; the result Value and any data it references
+/// (e.g., closure captures) are allocated in rt.load_arena and persist after
+/// this function returns.
 pub fn evalFn(rt: *Runtime, env: *Env, args: []const Value, loc: SourceLocation) anyerror!Value {
     try error_catalog.checkArity("eval", args, 1, loc);
-    var arena = std.heap.ArenaAllocator.init(rt.gpa);
-    defer arena.deinit();
     // A fresh top-level locals frame (the eval'd form's own `let*` / macro
     // expansions index into it), sized like the runner's top-level frame.
     var locals: [driver.MAX_LOCALS]Value = [_]Value{.nil_val} ** driver.MAX_LOCALS;
-    return driver.evalValue(rt, env, &locals, arena.allocator(), args[0], loc);
+    return driver.evalValue(rt, env, &locals, rt.load_arena.allocator(), args[0], loc);
 }
 
 pub fn hashFn(rt: *Runtime, env: *Env, args: []const Value, loc: SourceLocation) anyerror!Value {
