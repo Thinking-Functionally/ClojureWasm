@@ -148,6 +148,10 @@ test {
     _ = @import("eval/backend/jit/exec_mem.zig");
     _ = @import("lang/primitive/math.zig");
     _ = @import("lang/primitive/core.zig");
+    _ = @import("ir/eval.zig");
+    _ = @import("ir/edn_parser.zig");
+    _ = @import("ir/minimal_backend.zig");
+    _ = @import("eval/backend/bytecode_to_wasm.zig");
     _ = @import("lang/primitive/error.zig");
     _ = @import("lang/primitive/transient.zig");
     _ = @import("lang/primitive/edn.zig");
