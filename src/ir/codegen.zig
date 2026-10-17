@@ -13,6 +13,7 @@ const std = @import("std");
 const node_mod = @import("../eval/node.zig");
 const Node = node_mod.Node;
 const FnNode = node_mod.FnNode;
+const Value = @import("../runtime/value/value.zig").Value;
 const FnMethod = node_mod.FnMethod;
 
 /// Compilation error set (explicit to break Zig 0.16 inferred error set dependency loop)
@@ -97,19 +98,29 @@ pub const FunctionIR = struct {
     }
 };
 
-/// Compilation context - manages SSA value counters + function registry
+/// Compilation context - manages SSA value counters + function registry + constant values
 pub const CompileContext = struct {
     allocator: std.mem.Allocator,
     val_counter: u32 = 0,
     fn_counter: u32 = 0,
     block_counter: u32 = 0,
-    functions: std.ArrayList(FunctionIR) = .empty,
+    functions: std.ArrayList(FunctionIR),
+    constants: std.AutoHashMap(u32, Value),
+
+    pub fn init(allocator: std.mem.Allocator) CompileContext {
+        return .{
+            .allocator = allocator,
+            .functions = .empty,
+            .constants = std.AutoHashMap(u32, Value).init(allocator),
+        };
+    }
 
     pub fn deinit(self: *CompileContext) void {
         for (self.functions.items) |*func| {
             func.deinit(self.allocator);
         }
         self.functions.deinit(self.allocator);
+        self.constants.deinit();
     }
 
     /// Generate fresh :val/N ID
@@ -228,10 +239,12 @@ fn compileFnMethod(
     // Compile method.body → entry_block instructions
     const body_val = try compileNode(ctx, method.body);
 
-    // Terminator: return the body value
+    // Terminator: return the body value (heap-allocate args slice)
+    const return_args = try ctx.allocator.alloc(IRValueID, 1);
+    return_args[0] = body_val;
     entry_block.terminator = IRInstr{
         .op = "return",
-        .args = &[_]IRValueID{body_val},
+        .args = return_args,
     };
 
     try blocks.append(ctx.allocator, entry_block);
@@ -391,8 +404,10 @@ fn compileDefNode(ctx: *CompileContext, def: node_mod.DefNode) !IRValueID {
 
 /// Compile ConstantNode → IR :const instruction
 fn compileConstantNode(ctx: *CompileContext, const_node: node_mod.ConstantNode) !IRValueID {
-    _ = const_node; // TODO: Encode const_node.value into IR representation
     const result = ctx.freshValue();
+
+    // Store the constant value in the context's constant map
+    try ctx.constants.put(result.val, const_node.value);
 
     _ = IRInstr{
         .op = "const",
@@ -480,17 +495,19 @@ pub fn formatFunctionToEDN(
 
 test "compileFnNode: simple top-level function (no closure)" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Construct FnNode: (fn [x] x)
+    // Construct FnNode: (fn [x] 42) — body returns constant 42
     const param_names = &[_][]const u8{"x"};
+    const const_val = Value.initInteger(42);
+    var const_node = Node{ .constant = .{ .value = const_val } };
     const method = FnMethod{
         .arity = 1,
         .has_rest = false,
         .params = param_names,
-        .body = undefined, // Placeholder for now
+        .body = &const_node,
     };
 
     const fn_node = FnNode{
@@ -501,15 +518,13 @@ test "compileFnNode: simple top-level function (no closure)" {
         .defining_ns = "user",
     };
 
-    var ctx = CompileContext{ .allocator = allocator };
-    const functions = try compileFnNode(&ctx, fn_node);
-    defer {
-        for (functions) |*func| func.deinit(allocator);
-        allocator.free(functions);
-    }
+    var ctx = CompileContext.init(allocator);
+    defer ctx.deinit();
+    const fn_id = try compileFnNode(&ctx, fn_node);
+    _ = fn_id; // compileFnNode returns IRValueID pointing to the compiled function
 
-    try testing.expectEqual(@as(usize, 1), functions.len);
-    const func = functions[0];
+    try testing.expectEqual(@as(usize, 1), ctx.functions.items.len);
+    const func = ctx.functions.items[0];
 
     try testing.expectEqual(@as(usize, 0), func.captures.len); // No closure
     try testing.expectEqual(@as(usize, 1), func.params.len);
@@ -520,16 +535,18 @@ test "compileFnNode: simple top-level function (no closure)" {
 
 test "compileFnNode: simple closure (let [x 1] (fn [] x))" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Construct FnNode: (fn [] x) where x is in slot 0
+    // Construct FnNode: (fn [] 42) where closure captures nothing
+    const const_val = Value.initInteger(42);
+    var const_node = Node{ .constant = .{ .value = const_val } };
     const method = FnMethod{
         .arity = 0,
         .has_rest = false,
         .params = &[_][]const u8{},
-        .body = undefined,
+        .body = &const_node,
     };
 
     const fn_node = FnNode{
@@ -540,15 +557,13 @@ test "compileFnNode: simple closure (let [x 1] (fn [] x))" {
         .defining_ns = "user",
     };
 
-    var ctx = CompileContext{ .allocator = allocator };
-    const functions = try compileFnNode(&ctx, fn_node);
-    defer {
-        for (functions) |*func| func.deinit(allocator);
-        allocator.free(functions);
-    }
+    var ctx = CompileContext.init(allocator);
+    defer ctx.deinit();
+    const fn_id = try compileFnNode(&ctx, fn_node);
+    _ = fn_id; // compileFnNode returns IRValueID pointing to the compiled function
 
-    try testing.expectEqual(@as(usize, 1), functions.len);
-    const func = functions[0];
+    try testing.expectEqual(@as(usize, 1), ctx.functions.items.len);
+    const func = ctx.functions.items[0];
 
     try testing.expectEqual(@as(usize, 1), func.captures.len); // Captures slot 0
     try testing.expectEqual(@as(usize, 0), func.params.len); // No parameters
@@ -556,26 +571,30 @@ test "compileFnNode: simple closure (let [x 1] (fn [] x))" {
 
 test "compileFnNode: multi-arity function" {
     const testing = std.testing;
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Construct FnNode: (fn ([x] x) ([x y] (+ x y)))
+    // Construct FnNode: (fn ([x] 42) ([x y] 84)) — both methods return constants
     const param1 = &[_][]const u8{"x"};
     const param2 = &[_][]const u8{ "x", "y" };
+    const const_val1 = Value.initInteger(42);
+    const const_val2 = Value.initInteger(84);
+    var const_node1 = Node{ .constant = .{ .value = const_val1 } };
+    var const_node2 = Node{ .constant = .{ .value = const_val2 } };
 
     const method1 = FnMethod{
         .arity = 1,
         .has_rest = false,
         .params = param1,
-        .body = undefined,
+        .body = &const_node1,
     };
 
     const method2 = FnMethod{
         .arity = 2,
         .has_rest = false,
         .params = param2,
-        .body = undefined,
+        .body = &const_node2,
     };
 
     const fn_node = FnNode{
@@ -586,22 +605,20 @@ test "compileFnNode: multi-arity function" {
         .defining_ns = "user",
     };
 
-    var ctx = CompileContext{ .allocator = allocator };
-    const functions = try compileFnNode(&ctx, fn_node);
-    defer {
-        for (functions) |*func| func.deinit(allocator);
-        allocator.free(functions);
-    }
+    var ctx = CompileContext.init(allocator);
+    defer ctx.deinit();
+    const fn_id = try compileFnNode(&ctx, fn_node);
+    _ = fn_id; // compileFnNode returns IRValueID pointing to the compiled function
 
-    try testing.expectEqual(@as(usize, 2), functions.len); // Two arities
+    try testing.expectEqual(@as(usize, 2), ctx.functions.items.len); // Two arities
 
     // Check first arity
-    const func1 = functions[0];
+    const func1 = ctx.functions.items[0];
     try testing.expectEqual(@as(usize, 1), func1.params.len);
     try testing.expectEqual(@as(u16, 1), func1.arity.fixed);
 
     // Check second arity
-    const func2 = functions[1];
+    const func2 = ctx.functions.items[1];
     try testing.expectEqual(@as(usize, 2), func2.params.len);
     try testing.expectEqual(@as(u16, 2), func2.arity.fixed);
 }
