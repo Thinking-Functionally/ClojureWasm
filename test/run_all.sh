@@ -435,6 +435,8 @@ run_step "corpus_regression"   "bash scripts/check_corpus_regression.sh"
 # pre-build zig-out binary lacks __dump-host-classes (the ubuntunote miss).
 run_step "compat_members" "bash scripts/check_compat_members.sh"
 
+run_step "e2e_phase1_wasm_basic" "bash test/e2e/phase1_wasm_basic.sh"
+run_step "e2e_phase_wasm_aot_compile" "bash test/e2e/phase_wasm_aot_compile.sh"
 run_step "e2e_phase2_exit"     "bash test/e2e/phase2_exit.sh"
 run_step "e2e_phase3_cli"      "bash test/e2e/phase3_cli.sh"
 run_step "e2e_phase3_exit"     "bash test/e2e/phase3_exit.sh"

@@ -102,10 +102,10 @@ pub const SimpleWasmTranslator = struct {
     };
 
     const BlockKind = enum {
-        block,      // 普通 block
-        loop,       // loop (for recur)
-        if_then,    // if 嘅 then 分支
-        if_else,    // if 嘅 else 分支
+        block, // 普通 block
+        loop, // loop (for recur)
+        if_then, // if 嘅 then 分支
+        if_else, // if 嘅 else 分支
     };
 
     pub fn init(allocator: std.mem.Allocator) SimpleWasmTranslator {

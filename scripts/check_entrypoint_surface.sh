@@ -35,7 +35,7 @@ CLI=src/app/cli.zig
 MIN_SUBCOMMANDS=4
 
 # Entry points that evaluate user code — each must resolve the classpath.
-EVAL_SUBCOMMANDS=(repl nrepl build)
+EVAL_SUBCOMMANDS=(repl nrepl build compile)
 # render-error: decodes a CLJW_ERROR_LOG EDN event log; never evaluates code.
 EXEMPT_SUBCOMMANDS=(render-error)
 

@@ -480,6 +480,17 @@ pub fn buildWasmModule(allocator: std.mem.Allocator, chunk: BytecodeChunk) ![]co
     return try builder.build(chunk);
 }
 
+/// Save Wasm module bytes to a file (for AOT compilation)
+pub fn saveWasmToFile(io: std.Io, wasm_bytes: []const u8, file_path: []const u8) !void {
+    const file = try std.Io.File.create(io, file_path, .{});
+    defer file.close();
+
+    var buf: [4096]u8 = undefined;
+    var writer = file.writer(io, &buf);
+    try writer.interface.writeAll(wasm_bytes);
+    try writer.interface.flush();
+}
+
 // ===== Tests =====
 
 test "buildWasmModule: simple constant" {

@@ -8,7 +8,6 @@ const std = @import("std");
 const opcode_mod = @import("vm/opcode.zig");
 const Value = @import("../../runtime/value/value.zig").Value;
 const wasm_module_builder = @import("wasm_module_builder.zig");
-const builtin = @import("builtin");
 
 const BytecodeChunk = opcode_mod.BytecodeChunk;
 

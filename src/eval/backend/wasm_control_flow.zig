@@ -93,10 +93,10 @@ pub const ControlFlowAnalysis = struct {
 
 /// Block 種類
 pub const BlockKind = enum {
-    block,      // 普通 block (用於 forward jump)
-    loop,       // loop (用於 recur)
-    if_then,    // if 嘅 then 分支
-    if_else,    // if 嘅 else 分支
+    block, // 普通 block (用於 forward jump)
+    loop, // loop (用於 recur)
+    if_then, // if 嘅 then 分支
+    if_else, // if 嘅 else 分支
 };
 
 /// Block 信息
@@ -249,9 +249,9 @@ test "BlockStack: computeBranchDepth" {
     var stack = BlockStack.init(allocator);
     defer stack.deinit();
 
-    const l0 = try stack.push(.block, 0);  // depth 0
-    const l1 = try stack.push(.block, 1);  // depth 1
-    const l2 = try stack.push(.loop, 2);   // depth 2
+    const l0 = try stack.push(.block, 0); // depth 0
+    const l1 = try stack.push(.block, 1); // depth 1
+    const l2 = try stack.push(.loop, 2); // depth 2
 
     // 從 depth 2 跳到 l0 (depth 0): br 深度 = 2
     const d0 = stack.computeBranchDepth(l0);

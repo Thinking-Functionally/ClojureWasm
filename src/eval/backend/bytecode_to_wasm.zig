@@ -416,10 +416,7 @@ fn translateInstruction(
             try module.emitF64Const(@floatFromInt(i));
             try module.emit(.f64_lt);
         },
-        .op_le_local_const,
-        .op_gt_local_const,
-        .op_ge_local_const,
-        .op_eq_local_const => {
+        .op_le_local_const, .op_gt_local_const, .op_ge_local_const, .op_eq_local_const => {
             // 同上模式
             return TranslateError.UnsupportedOpcode;
         },
@@ -433,46 +430,19 @@ fn translateInstruction(
             try module.emitLocalGet(slot_b);
             try module.emit(.f64_add);
         },
-        .op_sub_locals,
-        .op_mul_locals,
-        .op_lt_locals,
-        .op_le_locals,
-        .op_gt_locals,
-        .op_ge_locals,
-        .op_eq_locals => {
+        .op_sub_locals, .op_mul_locals, .op_lt_locals, .op_le_locals, .op_gt_locals, .op_ge_locals, .op_eq_locals => {
             // 同上模式
             return TranslateError.UnsupportedOpcode;
         },
 
         // ===== 分支超指令 (比較+跳轉融合) =====
-        .op_branch_ne_local_const,
-        .op_branch_ge_local_const,
-        .op_branch_gt_local_const,
-        .op_branch_ne_locals,
-        .op_branch_ge_locals,
-        .op_branch_gt_locals => {
+        .op_branch_ne_local_const, .op_branch_ge_local_const, .op_branch_gt_local_const, .op_branch_ne_locals, .op_branch_ge_locals, .op_branch_gt_locals => {
             // 需要 block + br_if
             return TranslateError.UnsupportedOpcode;
         },
 
         // ===== 新增操作碼 (Phase 14+) =====
-        .op_recur_loop,
-        .op_mod,
-        .op_rem,
-        .op_quot,
-        .op_mod_local_const,
-        .op_rem_local_const,
-        .op_quot_local_const,
-        .op_mod_locals,
-        .op_rem_locals,
-        .op_quot_locals,
-        .op_ne,
-        .op_ne_local_const,
-        .op_ne_locals,
-        .op_get,
-        .op_nth,
-        .op_nth2,
-        .op_var_meta => {
+        .op_recur_loop, .op_mod, .op_rem, .op_quot, .op_mod_local_const, .op_rem_local_const, .op_quot_local_const, .op_mod_locals, .op_rem_locals, .op_quot_locals, .op_ne, .op_ne_local_const, .op_ne_locals, .op_get, .op_nth, .op_nth2, .op_var_meta => {
             return TranslateError.UnsupportedOpcode;
         },
     }

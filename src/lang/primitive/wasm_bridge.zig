@@ -113,7 +113,8 @@ pub fn wasmLoadBytesFn(
     // 驗證 magic number
     if (bytes.len < 8 or
         bytes[0] != 0x00 or bytes[1] != 0x61 or
-        bytes[2] != 0x73 or bytes[3] != 0x6D) {
+        bytes[2] != 0x73 or bytes[3] != 0x6D)
+    {
         return error_catalog.raise(.invalid_wasm_magic, loc, .{});
     }
 
