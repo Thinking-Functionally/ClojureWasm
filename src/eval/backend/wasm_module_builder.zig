@@ -558,12 +558,9 @@ pub const WasmModuleBuilder = struct {
             .op_get_var => {
                 // Stack: [] → [var_value]
                 // operand = var index
-                // Stub: push dummy value (0.0) — real implementation needs global section setup
-                _ = instr.operand;
-                try code.append(self.allocator, 0x44); // f64.const
-                const zero: f64 = 0.0;
-                const bytes = @as([8]u8, @bitCast(zero));
-                try code.appendSlice(self.allocator, &bytes);
+                const global_idx = @as(u32, instr.operand);
+                try code.append(self.allocator, 0x23); // global.get
+                try self.writeLEB128(code, global_idx);
             },
             .op_set_var => {
                 // store to global (set!)
@@ -628,15 +625,17 @@ pub const WasmModuleBuilder = struct {
             .op_vector_literal => {
                 // Stack: [v1, v2, ..., vN] → [vector]
                 // operand = element count
-                // Stub: pop all elements and push dummy vector (0.0)
+                // Phase B stub: pop elements, push NaN-boxed heap-A placeholder
+                // (real heap allocation deferred)
                 const elem_count = instr.operand;
                 for (0..elem_count) |_| {
                     try code.append(self.allocator, 0x1A); // drop
                 }
-                // Push dummy vector (0.0)
+                // Push NaN-boxed heap-A tag (0xFFF8_0000_0000_0000) as placeholder
                 try code.append(self.allocator, 0x44); // f64.const
-                const zero: f64 = 0.0;
-                const bytes = @as([8]u8, @bitCast(zero));
+                const heap_a_tag: u64 = 0xFFF8_0000_0000_0000;
+                const vec_placeholder: f64 = @bitCast(heap_a_tag);
+                const bytes = @as([8]u8, @bitCast(vec_placeholder));
                 try code.appendSlice(self.allocator, &bytes);
             },
             .op_set_literal => {
@@ -655,15 +654,16 @@ pub const WasmModuleBuilder = struct {
             .op_map_literal => {
                 // Stack: [k1, v1, k2, v2, ...] → [map]
                 // operand = value count (= 2 * pair_count)
-                // Stub: pop all values and push dummy map (0.0)
+                // Phase C stub: pop all key-value pairs, push NaN-boxed heap-A placeholder
                 const value_count = instr.operand;
                 for (0..value_count) |_| {
                     try code.append(self.allocator, 0x1A); // drop
                 }
-                // Push dummy map (0.0)
+                // Push NaN-boxed heap-A tag (0xFFF8_0000_0000_0000) as placeholder
                 try code.append(self.allocator, 0x44); // f64.const
-                const zero: f64 = 0.0;
-                const bytes = @as([8]u8, @bitCast(zero));
+                const heap_a_tag: u64 = 0xFFF8_0000_0000_0000;
+                const map_placeholder: f64 = @bitCast(heap_a_tag);
+                const bytes = @as([8]u8, @bitCast(map_placeholder));
                 try code.appendSlice(self.allocator, &bytes);
             },
             .op_var_meta => {
