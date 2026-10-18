@@ -482,8 +482,8 @@ pub fn buildWasmModule(allocator: std.mem.Allocator, chunk: BytecodeChunk) ![]co
 
 /// Save Wasm module bytes to a file (for AOT compilation)
 pub fn saveWasmToFile(io: std.Io, wasm_bytes: []const u8, file_path: []const u8) !void {
-    const file = try std.Io.File.create(io, file_path, .{});
-    defer file.close();
+    const file = try std.Io.Dir.cwd().createFile(io, file_path, .{ .truncate = true });
+    defer file.close(io);
 
     var buf: [4096]u8 = undefined;
     var writer = file.writer(io, &buf);

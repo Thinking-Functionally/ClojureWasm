@@ -273,7 +273,7 @@ pub fn dispatch(init: std.process.Init) !void {
             var in_path: ?[]const u8 = null;
             var out_path: ?[]const u8 = null;
             var compile_cp: ?[]const u8 = null;
-            var compile_aliases = std.ArrayList([]const u8).init(arena);
+            var compile_aliases: std.ArrayList([]const u8) = .empty;
             while (args.next()) |a| {
                 if (std.mem.eql(u8, a, "-o")) {
                     out_path = args.next() orelse {
@@ -307,7 +307,7 @@ pub fn dispatch(init: std.process.Init) !void {
             var rt = runtime_mod.Runtime.init(io, gpa);
             defer rt.deinit();
             var env = try @import("../runtime/env.zig").Env.init(&rt);
-            defer env.deinit(gpa);
+            defer env.deinit();
             compile_mod.compileToWasm(io, gpa, &rt, &env, in_path.?, out_path.?) catch |err| {
                 try stderr.print("compile failed: {s}\n", .{@errorName(err)});
                 try stderr.flush();
