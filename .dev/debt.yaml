@@ -188,25 +188,6 @@ active:
       verification item that raised it); src/runtime/cljw/wasm/component.zig
       (`invokeWithSig`, `resourceDropFn` — both map to `wasm_trap`);
       zwasm src/api/component.zig `dropResource`.
-  - id: "D-566"
-    status: |-
-      open (2026-07-29, ADR-0175 deferred-hardening row). Alloc-side
-      unregistered-mutator assert: `gc_heap.alloc` (and `pushAnalysisRoot`)
-      should assert `root_set.is_registered_worker or <is the heap's owning
-      main thread>` so the next pre-register (or cap-fallthrough) mutator is a
-      caught bug instead of a ~1.5% GP-fault flake. Survey done 2026-07-29:
-      PRODUCTION is assert-clean (only main + the three registered worker
-      families allocate; nrepl/http serve serially on the calling thread), but
-      in-tree unit tests alloc from unregistered test threads (lazy_seq force-
-      race workers at lazy_seq.zig:461, plus the gc_heap/root_set churn tests
-      — each site needs registration or an exemption), and "owning main
-      thread" needs a per-GcHeap `main_thread_id` stamped at init.
-    category: "concurrency"
-    barrier: |-
-      Discharges by: the test-audit sweep (register or exempt every
-      unregistered-alloc test thread) + the per-heap main-thread-id stamp +
-      the assert itself, landed together. Cross-ref ADR-0175 § Consequences.
-    last_reviewed: "2026-07-29"
   - id: "D-564"
     status: |-
       open (2026-07-17, ADR-0174 D6 residual). Thread interrupt family
@@ -2788,6 +2769,20 @@ standing:
     barrier: "open after the D-440 arc completes (R4 + R5 must first rewrite the bulk of 'Phase N' citations to gap-area terms). Premature adoption = ~70 dangling citations with no 1:1 redirect. Trigger: D-440 R4/R5 done + a user nod to re-architect the planning axis (it is depth-4, the project's organizing metaphor)."
     last_reviewed: "2026-06-15"
 discharged:
+  - id: "D-566"
+    status: |-
+      DISCHARGED 2026-10-19. Alloc-side unregistered-mutator assert (ADR-0175
+      deferred-hardening row) landed: GcHeap stamps `main_thread_id` at init,
+      allocSized asserts in safe-build `(current == main_thread_id || is_
+      registered_worker)`, test audit registered worker threads in gc_heap.zig:
+      706 (4 concurrent alloc workers) and lazy_seq.zig:421 (8 force-race
+      workers); root_set parallel tests already registered. See ADR-0175 am1.
+    category: "concurrency"
+    barrier: |-
+      Discharges by: the test-audit sweep (register or exempt every
+      unregistered-alloc test thread) + the per-heap main-thread-id stamp +
+      the assert itself, landed together. Cross-ref ADR-0175 § Consequences.
+    last_reviewed: "2026-10-19"
   - id: "D-577"
     status: |-
       DISCHARGED 2026-10-19 — two-pass CFG reconstruction landed on feature/wasm-aot-

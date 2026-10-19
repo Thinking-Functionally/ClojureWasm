@@ -452,6 +452,17 @@ test "force: concurrent first-force invokes the thunk at most once (D-046, ADR-0
 
     const Worker = struct {
         fn run(rt: *Runtime, e: *env_mod.Env, lazy: Value) void {
+            // D-566 assert requires registered worker or main thread. Register
+            // this force-race worker so concurrent `force` → alloc is assert-clean.
+            const root_set = @import("gc/root_set.zig");
+            const no_tx: ?*anyopaque = null;
+            var ctx = root_set.workerContext(&no_tx);
+            root_set.registerThread(&ctx) catch {
+                // TooManyThreads (>64 workers) — 8 force-race workers should never hit this.
+                std.debug.panic("Worker registration failed (MAX_GC_THREADS exceeded)", .{});
+            };
+            defer root_set.unregisterThread(&ctx);
+
             while (!Mock.start.load(.acquire)) std.atomic.spinLoopHint();
             _ = force(rt, e, lazy) catch unreachable;
         }

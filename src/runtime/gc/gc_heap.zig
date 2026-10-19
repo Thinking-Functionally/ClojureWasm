@@ -274,9 +274,15 @@ pub const GcHeap = struct {
     /// (the allocator API has no `io` arg). Uncontended until real
     /// threads land (`future` / `pmap`).
     gc_mutex: std.Io.Mutex = .init,
+    /// D-566: main thread ID stamped at init. In safe-build, alloc
+    /// asserts that calling thread is main or registered worker.
+    main_thread_id: std.Thread.Id = undefined,
 
     pub fn init(infra: std.mem.Allocator) GcHeap {
-        var g = GcHeap{ .infra = infra };
+        var g = GcHeap{
+            .infra = infra,
+            .main_thread_id = std.Thread.getCurrentId(),
+        };
         g.free_pools.initMap(infra);
         // D-519 (ADR-0164): CLJW_GC_THRESHOLD_MB tunes the auto-collect floor — the
         // wall-clock GO gate raises it until every won fastest-script bench holds.
@@ -493,6 +499,17 @@ pub const GcHeap = struct {
             defer in_alloc_torture = false;
             mark_sweep.collectStopTheWorld(self, .{ .envs = &.{e}, .gc = self }, false);
         }
+        // D-566: defensive assert — unregistered thread may not allocate.
+        // PRODUCTION is assert-clean (main + 3 registered worker families only).
+        // In-tree test threads with unregistered alloc are audited separately.
+        const builtin = @import("builtin");
+        if (builtin.mode == .Debug or builtin.mode == .ReleaseSafe) {
+            const current = std.Thread.getCurrentId();
+            const root_set = @import("root_set.zig");
+            if (current != self.main_thread_id and !root_set.is_registered_worker) {
+                @panic("GC alloc from unregistered thread (D-566)");
+            }
+        }
         // D-519 (ADR-0164): threshold-driven auto-collect — the completeness floor
         // for a bulk Zig-primitive allocation that never crosses a VM back-edge (the
         // same boundary + roots-quiescent rationale as the `heap_ceiling` check
@@ -707,6 +724,18 @@ test "concurrent alloc through the global heap lock is race-free (ADR-0090 §2)"
 
     const Worker = struct {
         fn run(g: *GcHeap) void {
+            // D-566 assert requires registered worker or main thread. Register
+            // this worker even though bare GcHeap test triggers no collect today,
+            // so future threshold changes / torture mode remain assert-clean.
+            const root_set = @import("root_set.zig");
+            const no_tx: ?*anyopaque = null;
+            var ctx = root_set.workerContext(&no_tx);
+            root_set.registerThread(&ctx) catch {
+                // TooManyThreads (>64 workers) — test harness should never hit this.
+                std.debug.panic("Worker registration failed (MAX_GC_THREADS exceeded)", .{});
+            };
+            defer root_set.unregisterThread(&ctx);
+
             var i: usize = 0;
             while (i < per_thread) : (i += 1) {
                 const c = g.alloc(Cell) catch return;

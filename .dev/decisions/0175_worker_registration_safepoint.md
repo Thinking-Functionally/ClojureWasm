@@ -176,3 +176,33 @@ protection. No F-NNN conflict exists in any shape.
 - `src/runtime/agent.zig` — ctx builder adoption.
 - `.dev/gc_rooting.md` — E3/E4 rows note the registration safepoint.
 - `.dev/debt.yaml` — D-548 recurrence note; new D-566.
+
+---
+
+## Revision history
+
+### Revision 1 (2026-10-19) — D-566 discharged
+
+**D-566 (the deferred-hardening row from line 137 "Alternatives considered")
+has landed:**
+
+- `GcHeap` now stamps `main_thread_id: std.Thread.Id` at `init()` (the
+  thread calling `init` — CLI entry for runtime-embedded, test harness for
+  standalone GcHeap).
+- `gc_heap.allocSized` asserts in safe-build:
+  ```zig
+  if (std.debug.runtime_safety) {
+      const current = std.Thread.getCurrentId();
+      if (current != self.main_thread_id and !root_set.is_registered_worker) {
+          @panic("GC alloc from unregistered thread (D-566)");
+      }
+  }
+  ```
+- Test audit: in-tree unit tests now register worker threads (gc_heap.zig:706
+  concurrent alloc test, lazy_seq.zig:421 force-race test) or run on main
+  only; root_set parallel tests (line 1083, 1104, 1302) already registered.
+  PRODUCTION remains assert-clean (main + 3 registered worker families only).
+
+Closes D-566 per its Barrier: test audit + main_thread_id stamp + assert
+landed together (2026-10-19 commit).
+
