@@ -483,6 +483,19 @@ pub const Code = enum {
     /// tables, so without this check the call silently operates on whatever the
     /// callee happens to have at that index (ADR-0159 amendment 1).
     wasm_resource_foreign,
+    /// args: `.{ .handle = u32 }` — `wasm/resource-drop` was called with an
+    /// invalid handle (out of range, never allocated, stale after drop+reuse, or
+    /// a freed tombstone). Distinct from `wasm_resource_dropped` (cljw-side
+    /// idempotent guard) — this is zwasm's InvalidHandle (D-568).
+    wasm_resource_invalid_handle,
+    /// args: `.{}` — `wasm/resource-drop` was called on an `own` handle that is
+    /// still lent out (`num_lends != 0` in zwasm's resource table). The handle
+    /// must be returned (all `borrow` handles dropped) before the `own` can drop.
+    wasm_resource_still_borrowed,
+    /// args: `.{}` — `wasm/resource-drop` was called on a handle whose resource
+    /// type does not match the expected type (zwasm TypeMismatch — the handle
+    /// exists but is the wrong resource kind).
+    wasm_resource_type_mismatch,
     /// args: `.{}` — `wasm/call`'s export-name argument was not a string.
     wasm_export_name_invalid,
     /// args: `.{ .name = "..." }` — `wasm/call` found no export of that name.
@@ -1680,6 +1693,21 @@ pub fn entry(comptime code: Code) Entry {
             .kind = .value_error,
             .phase = .eval,
             .template = "wasm component: this resource handle belongs to a different component",
+        },
+        .wasm_resource_invalid_handle => .{
+            .kind = .value_error,
+            .phase = .eval,
+            .template = "wasm/resource-drop: handle {[handle]d} is invalid (not found in resource table, or freed)",
+        },
+        .wasm_resource_still_borrowed => .{
+            .kind = .value_error,
+            .phase = .eval,
+            .template = "wasm/resource-drop: cannot drop an 'own' handle that is still lent out (active borrows)",
+        },
+        .wasm_resource_type_mismatch => .{
+            .kind = .value_error,
+            .phase = .eval,
+            .template = "wasm/resource-drop: handle's resource type does not match the expected type",
         },
         .wasm_export_name_invalid => .{
             .kind = .type_error,

@@ -554,8 +554,17 @@ pub fn resourceDropFn(rt: *Runtime, env: *Env, args: []const Value, loc: SourceL
         host_instance.asHostInstance(comp_handle).descriptor != &component_descriptor)
         return error_catalog.raise(.wasm_opts_invalid, loc, .{ .detail = "resource handle's owning component is not a loaded component" });
     const box: *ComponentLoaded = @ptrFromInt(host_instance.asHostInstance(comp_handle).state[0]);
-    box.opened.dropResource(@intCast(inst.state[1])) catch
-        return error_catalog.raise(.wasm_trap, loc, .{});
+    const handle_u32 = @as(u32, @intCast(inst.state[1]));
+    box.opened.dropResource(handle_u32) catch |e| {
+        // Map zwasm resource_table.Error to cljw-specific catalog entries (D-568).
+        // zwasm v2.5.0 exposes: InvalidHandle / TypeMismatch / HandleStillBorrowed.
+        return switch (e) {
+            error.InvalidHandle => error_catalog.raise(.wasm_resource_invalid_handle, loc, .{ .handle = handle_u32 }),
+            error.TypeMismatch => error_catalog.raise(.wasm_resource_type_mismatch, loc, .{}),
+            error.HandleStillBorrowed => error_catalog.raise(.wasm_resource_still_borrowed, loc, .{}),
+            else => error_catalog.raise(.wasm_trap, loc, .{}), // Fallback for unanticipated errors
+        };
+    };
     host_instance.setState(args[0], 2, 1);
     return Value.nil_val;
 }
