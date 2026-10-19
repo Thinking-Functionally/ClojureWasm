@@ -1624,6 +1624,28 @@ active:
     barrier: |-
       tractable now; M-sized survey-first. Value rises with D-528 (real deps.edn corpus).
     last_reviewed: "2026-07-02"
+  - id: "D-577"
+    status: |-
+      open (2026-10-19, feature/wasm-aot-compile-plus-fixes branch). Forward jumps in
+      BytecodeChunk→Wasm translation emit depth=0 placeholder (structurally incorrect
+      Wasm). Root cause: Always-wrap+Block-per-target pattern (survey recommendation)
+      does not handle forward jumps — target IP's block label is not yet allocated
+      when jump is translated. Region Tracking (Devil's-advocate Alt 2: CFG
+      reconstruction + dominator analysis + if/loop/block structure inference) is the
+      F-002-aligned solution (finished-form clean, canonical technique for flat→structured
+      control flow). Survey: private/notes/phase-wasm-control-flow-survey.md. Devil's-
+      advocate: Step 0.6 fork (3 alternatives evaluated, Alt 2 recommended within F-NNN
+      envelope).
+    category: "wasm-backend"
+    barrier: |-
+      blocked-by: feature branch merge to main (this work lives on feature/wasm-aot-
+      compile-plus-fixes; D-577 open against main). After merge: tractable M-sized
+      (CFG builder + dominator analysis + region partitioner + block/loop/if structure
+      emitter; ~200 LOC estimated vs survey's ~300 LOC Always-wrap baseline). Pickup:
+      read ADR-TBD (the Devil's-advocate output embedded), implement Region Tracking
+      per Alt 2, replace depth=0 placeholders with correct computeBranchDepth calls,
+      remove PROVISIONAL markers (data/feature_deps.yaml#wasm/backend/control_flow_forward_jump).
+    last_reviewed: "2026-10-19"
 standing:
   - id: "D-549"
     status: |-

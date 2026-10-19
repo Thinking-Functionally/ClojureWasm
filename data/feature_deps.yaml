@@ -668,6 +668,36 @@ entries:
       row 7.12 cycle 2 landed the literal pass-through; D-051 cycle 3 /
       §A26 capture groups unblocked the discharge.
 
+  - name: wasm/backend/control_flow_forward_jump
+    kind: subsystem
+    defined_in: src/eval/backend/wasm_module_builder.zig
+    status: provisional
+    requires_features: []
+    requires_debts:
+      - D-577
+    provisional_markers:
+      - location: src/eval/backend/wasm_module_builder.zig:415-416
+        behavior: Forward jumps emit depth=0 placeholder (structurally incorrect Wasm)
+        reason: |
+          BytecodeChunk→Wasm translation uses Always-wrap+Block-per-target pattern
+          (survey recommendation) which does not handle forward jumps — target IP's
+          block label is not yet allocated when jump is translated. Depth=0 is a
+          placeholder until Region Tracking (Devil's-advocate Alt 2: dominator
+          analysis + CFG reconstruction) lands.
+      - location: src/eval/backend/wasm_module_builder.zig:426
+        behavior: Forward conditional jumps emit depth=0 placeholder
+        reason: Same as above (op_jump_if_false)
+    notes: |
+      Provisional marker introduced 2026-10-19 (feature/wasm-aot-compile-plus-fixes
+      branch). Control flow label resolution baseline uses Always-wrap+Block-per-target
+      (survey: private/notes/phase-wasm-control-flow-survey.md) which correctly
+      handles backward jumps (loop wrapping) but emits depth=0 placeholder for forward
+      jumps (target block not yet emitted → label not yet allocated). Region Tracking
+      (Alt 2 from Devil's-advocate fork: CFG reconstruction + dominator analysis +
+      if/loop/block structure inference) is the F-002-aligned solution (finished-form
+      clean, canonical technique). Close-out: D-577 lands Region Tracking → replace
+      placeholder with correct depth calculation → remove markers.
+
   - name: clojure.core/Throwable->map
     kind: var
     defined_in: src/lang/clj/clojure/core.clj
