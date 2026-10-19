@@ -28,6 +28,7 @@ pub const BuildError = error{
     InvalidJumpTarget,
     TooManyBlocks,
     UnmatchedBlock,
+    MissingStringOffset,
 } || std.mem.Allocator.Error;
 
 /// Wasm 模組建造器
@@ -43,6 +44,9 @@ pub const WasmModuleBuilder = struct {
     // Maps constant pool index → linear memory offset for heap types
     // (string constants live in data section at known offsets)
     string_offsets: std.AutoHashMap(u16, u32),
+    // Phase 3b: Runtime heap allocation watermark (next free offset)
+    // Starts after static data; bumped by heap_alloc export at runtime
+    heap_watermark: u32,
 
     pub fn init(allocator: std.mem.Allocator) WasmModuleBuilder {
         return .{
@@ -53,6 +57,7 @@ pub const WasmModuleBuilder = struct {
             .linear_memory_size = 65536, // 1 page = 64KB
             .function_table_size = 256,
             .string_offsets = std.AutoHashMap(u16, u32).init(allocator),
+            .heap_watermark = 1024, // HEAP_START
         };
     }
 
@@ -64,14 +69,16 @@ pub const WasmModuleBuilder = struct {
     /// Scan chunk.constants for heap types and assign linear memory offsets.
     /// Phase 3: Static strings only; dynamic allocation is Phase 3b.
     fn scanAndMapHeapConstants(self: *WasmModuleBuilder, chunk: BytecodeChunk) !void {
-        var current_offset: u32 = 1024; // HEAP_START
+        var current_offset: u32 = self.heap_watermark;
 
         for (chunk.constants, 0..) |val, idx| {
             if (val.tag() != .string) continue;
 
             // Decode string length (requires decoding the pointer)
             const str_ptr = val.decodePtr([*]const u8);
-            const str_len = std.mem.len(str_ptr);
+            // Find null terminator for [*]const u8
+            var str_len: usize = 0;
+            while (str_ptr[str_len] != 0) : (str_len += 1) {}
 
             // Align offset to 8 bytes (HeapHeader requirement)
             current_offset = std.mem.alignForward(u32, current_offset, 8);
@@ -83,6 +90,10 @@ pub const WasmModuleBuilder = struct {
             const total_size = 8 + str_len;
             current_offset += @intCast(total_size);
         }
+
+        // Update heap watermark to end of static data
+        // (runtime allocations start here)
+        self.heap_watermark = current_offset;
     }
 
     /// 構建完整嘅 Wasm 模組
@@ -226,16 +237,16 @@ pub const WasmModuleBuilder = struct {
         // 掃描所有 op_def / op_set_var / op_get_var 以確定需要幾多 globals
         self.num_globals = try self.scanGlobals(chunk);
 
-        if (self.num_globals == 0) return; // 冇 globals 就跳過
-
+        // Always write global section (at least for heap_watermark)
         try module.append(self.allocator, 0x06);
 
         var payload: std.ArrayList(u8) = .empty;
         defer payload.deinit(self.allocator);
 
-        try self.writeLEB128(&payload, self.num_globals);
+        // num_globals + 1 (for heap_watermark)
+        try self.writeLEB128(&payload, self.num_globals + 1);
 
-        // 每個 global: (mut f64) 初始化為 0.0
+        // User globals: (mut f64) 初始化為 0.0
         for (0..self.num_globals) |_| {
             try payload.append(self.allocator, 0x7C); // f64
             try payload.append(self.allocator, 0x01); // mutable
@@ -247,6 +258,16 @@ pub const WasmModuleBuilder = struct {
             try payload.appendSlice(self.allocator, &bytes);
             try payload.append(self.allocator, 0x0B); // end
         }
+
+        // Global for heap watermark: (mut i32) initialized to heap_watermark value
+        // Phase 3b: runtime allocator state
+        try payload.append(self.allocator, 0x7F); // i32
+        try payload.append(self.allocator, 0x01); // mutable
+
+        // init expr: i32.const heap_watermark
+        try payload.append(self.allocator, 0x41); // i32.const
+        try self.writeLEB128(&payload, self.heap_watermark);
+        try payload.append(self.allocator, 0x0B); // end
 
         try self.writeLEB128(module, @intCast(payload.items.len));
         try module.appendSlice(self.allocator, payload.items);
@@ -275,8 +296,8 @@ pub const WasmModuleBuilder = struct {
         var payload: std.ArrayList(u8) = .empty;
         defer payload.deinit(self.allocator);
 
-        // 3 個類型
-        try self.writeLEB128(&payload, 3);
+        // 4 個類型
+        try self.writeLEB128(&payload, 4);
 
         // Type 0: main 函數 [] -> [f64]
         try payload.append(self.allocator, 0x60);
@@ -300,6 +321,14 @@ pub const WasmModuleBuilder = struct {
         try self.writeLEB128(&payload, 1);
         try payload.append(self.allocator, 0x7C); // f64
 
+        // Type 3: heap_alloc [i32] -> [i32]
+        // Phase 3b runtime allocator
+        try payload.append(self.allocator, 0x60);
+        try self.writeLEB128(&payload, 1);
+        try payload.append(self.allocator, 0x7F); // i32
+        try self.writeLEB128(&payload, 1);
+        try payload.append(self.allocator, 0x7F); // i32
+
         // 寫入 payload 長度同內容
         try self.writeLEB128(module, @intCast(payload.items.len));
         try module.appendSlice(self.allocator, payload.items);
@@ -312,10 +341,12 @@ pub const WasmModuleBuilder = struct {
         var payload: std.ArrayList(u8) = .empty;
         defer payload.deinit(self.allocator);
 
-        // 1 個函數
-        try self.writeLEB128(&payload, 1);
-        // 使用類型 0
+        // 2 個函數：main + heap_alloc
+        try self.writeLEB128(&payload, 2);
+        // Function 0: main (type 0)
         try self.writeLEB128(&payload, 0);
+        // Function 1: heap_alloc (type 3)
+        try self.writeLEB128(&payload, 3);
 
         try self.writeLEB128(module, @intCast(payload.items.len));
         try module.appendSlice(self.allocator, payload.items);
@@ -328,8 +359,8 @@ pub const WasmModuleBuilder = struct {
         var payload: std.ArrayList(u8) = .empty;
         defer payload.deinit(self.allocator);
 
-        // 2 個導出：main 函數 + memory
-        try self.writeLEB128(&payload, 2);
+        // 3 個導出：main 函數 + memory + heap_alloc
+        try self.writeLEB128(&payload, 3);
 
         // 導出 1: "main" 函數
         const name = "main";
@@ -350,6 +381,15 @@ pub const WasmModuleBuilder = struct {
         // memory 索引 0
         try self.writeLEB128(&payload, 0);
 
+        // 導出 3: "heap_alloc" (Phase 3b: runtime allocator)
+        const alloc_name = "heap_alloc";
+        try self.writeLEB128(&payload, @intCast(alloc_name.len));
+        try payload.appendSlice(self.allocator, alloc_name);
+        // 導出類型: 函數
+        try payload.append(self.allocator, 0x00);
+        // 函數索引 = num_builtins + 1 (main 之後)
+        try self.writeLEB128(&payload, num_builtins + 1);
+
         try self.writeLEB128(module, @intCast(payload.items.len));
         try module.appendSlice(self.allocator, payload.items);
     }
@@ -357,16 +397,11 @@ pub const WasmModuleBuilder = struct {
     fn writeDataSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8), chunk: BytecodeChunk) !void {
         // Section ID 11 (data)
         // Pre-populate linear memory with string constants from chunk.constants[]
-
-        // PROVISIONAL: Static string constants only (no runtime allocator yet) [refs: D-578, feature_deps.yaml#wasm/backend/linear_memory]
         //
+        // Phase 3b: Static strings in data section + runtime heap_alloc for dynamic allocation.
         // Emit data segments for each string constant using the offset map
         // built by scanAndMapHeapConstants. Each segment contains:
         // HeapHeader (8 bytes: tag + length) + string bytes.
-        //
-        // Limitation: This only handles STATIC strings (from constants pool).
-        // Dynamic strings (created at runtime via str, format, etc.) require
-        // a runtime allocator (Phase 3b).
 
         try module.append(self.allocator, 0x0B); // section ID 11
 
@@ -385,7 +420,10 @@ pub const WasmModuleBuilder = struct {
 
             // Decode string pointer from Value
             const str_ptr = val.decodePtr([*]const u8);
-            const str_len = std.mem.len(str_ptr);
+            // Need to get length differently for [*]const u8
+            // Find null terminator
+            var str_len: usize = 0;
+            while (str_ptr[str_len] != 0) : (str_len += 1) {}
 
             // Data segment: active (flags=0x00), memory 0, offset expression, data
             try self.writeLEB128(&payload, 0x00); // Active segment, memory 0
@@ -402,8 +440,8 @@ pub const WasmModuleBuilder = struct {
 
             // HeapHeader: tag (u32) + length (u32)
             // tag = 0x01 for string (HeapTag enum value)
-            try self.writeU32(self, &payload, self.allocator, 0x01);
-            try self.writeU32(self, &payload, self.allocator, @intCast(str_len));
+            try WasmModuleBuilder.writeU32(undefined, &payload, self.allocator, 0x01);
+            try WasmModuleBuilder.writeU32(undefined, &payload, self.allocator, @intCast(str_len));
 
             // String bytes
             try payload.appendSlice(self.allocator, str_ptr[0..str_len]);
@@ -420,46 +458,140 @@ pub const WasmModuleBuilder = struct {
         var section_payload: std.ArrayList(u8) = .empty;
         defer section_payload.deinit(self.allocator);
 
-        // 1 個函數體
-        try self.writeLEB128(&section_payload, 1);
+        // 2 個函數體：main + heap_alloc
+        try self.writeLEB128(&section_payload, 2);
 
-        // 函數體
-        var func_body: std.ArrayList(u8) = .empty;
-        defer func_body.deinit(self.allocator);
+        // Function 0: main
+        {
+            var func_body: std.ArrayList(u8) = .empty;
+            defer func_body.deinit(self.allocator);
 
-        // Locals 聲明 (先掃描需要幾多 locals)
-        const user_locals = try self.scanLocals(chunk);
+            // Locals 聲明 (先掃描需要幾多 locals)
+            const user_locals = try self.scanLocals(chunk);
 
-        // Reserve extra temp locals for operations that need them:
-        // - op_mod needs 1 temp (to save b)
-        // - op_rem needs 1 temp (to save quot)
-        const needs_temp_locals = self.needsTempLocals(chunk);
-        const num_temp_locals: u32 = if (needs_temp_locals) 2 else 0;
-        self.num_locals = user_locals + num_temp_locals;
+            // Reserve extra temp locals for operations that need them:
+            // - op_mod needs 1 temp (to save b)
+            // - op_rem needs 1 temp (to save quot)
+            const needs_temp_locals = self.needsTempLocals(chunk);
+            const num_temp_locals: u32 = if (needs_temp_locals) 2 else 0;
+            self.num_locals = user_locals + num_temp_locals;
 
-        // Local 聲明：num_locals 個 f64
-        if (self.num_locals > 0) {
-            try self.writeLEB128(&func_body, 1); // 1 組 locals
-            try self.writeLEB128(&func_body, self.num_locals); // 數量
-            try func_body.append(self.allocator, 0x7C); // f64
-        } else {
-            try self.writeLEB128(&func_body, 0); // 0 組 locals
+            // Local 聲明：num_locals 個 f64
+            if (self.num_locals > 0) {
+                try self.writeLEB128(&func_body, 1); // 1 組 locals
+                try self.writeLEB128(&func_body, self.num_locals); // 數量
+                try func_body.append(self.allocator, 0x7C); // f64
+            } else {
+                try self.writeLEB128(&func_body, 0); // 0 組 locals
+            }
+
+            // 第一遍：控制流分析
+            var cf_analysis = ControlFlowAnalysis.init(self.allocator);
+            defer cf_analysis.deinit();
+            try cf_analysis.analyze(chunk);
+
+            // 第二遍：翻譯指令 (帶控制流結構)
+            try self.translateWithControlFlow(&func_body, chunk, &cf_analysis);
+
+            // end
+            try func_body.append(self.allocator, 0x0B);
+
+            // 寫入函數體長度同內容
+            try self.writeLEB128(&section_payload, @intCast(func_body.items.len));
+            try section_payload.appendSlice(self.allocator, func_body.items);
         }
 
-        // 第一遍：控制流分析
-        var cf_analysis = ControlFlowAnalysis.init(self.allocator);
-        defer cf_analysis.deinit();
-        try cf_analysis.analyze(chunk);
+        // Function 1: heap_alloc(size: i32) -> i32
+        // Phase 3b: runtime linear memory bump allocator
+        {
+            var func_body: std.ArrayList(u8) = .empty;
+            defer func_body.deinit(self.allocator);
 
-        // 第二遍：翻譯指令 (帶控制流結構)
-        try self.translateWithControlFlow(&func_body, chunk, &cf_analysis);
+            // No locals (only uses param $size and global $heap_watermark)
+            try self.writeLEB128(&func_body, 0);
 
-        // end
-        try func_body.append(self.allocator, 0x0B);
+            // Get current heap watermark (global index = num_globals)
+            const heap_watermark_idx = self.num_globals;
 
-        // 寫入函數體長度同內容
-        try self.writeLEB128(&section_payload, @intCast(func_body.items.len));
-        try section_payload.appendSlice(self.allocator, func_body.items);
+            // local.get 0 (param $size)
+            try func_body.append(self.allocator, 0x20); // local.get
+            try self.writeLEB128(&func_body, 0);
+
+            // Align size to 8 bytes: (size + 7) & ~7
+            // i32.const 7
+            try func_body.append(self.allocator, 0x41); // i32.const
+            try self.writeLEB128(&func_body, 7);
+            // i32.add
+            try func_body.append(self.allocator, 0x6A);
+            // i32.const -8 (two's complement of 8 = 0xFFFFFFF8)
+            try func_body.append(self.allocator, 0x41); // i32.const
+            try self.writeLEB128(&func_body, @as(u32, @bitCast(@as(i32, -8))));
+            // i32.and
+            try func_body.append(self.allocator, 0x71);
+
+            // Get heap watermark (current offset)
+            try func_body.append(self.allocator, 0x23); // global.get
+            try self.writeLEB128(&func_body, heap_watermark_idx);
+
+            // Duplicate for return value (stack: [aligned_size, current_offset, current_offset])
+            try func_body.append(self.allocator, 0x1A); // drop
+            try func_body.append(self.allocator, 0x23); // global.get (reload)
+            try self.writeLEB128(&func_body, heap_watermark_idx);
+            try func_body.append(self.allocator, 0x22); // local.tee 1 (if we had a local)
+            // Actually we have no locals, so just duplicate via get-set-get pattern:
+            // Stack manipulation: we want [aligned_size, offset, offset]
+            // Current: [aligned_size, offset]
+            // Push offset again
+            try func_body.append(self.allocator, 0x23); // global.get
+            try self.writeLEB128(&func_body, heap_watermark_idx);
+
+            // Now stack: [aligned_size, offset, offset]
+            // Update watermark: offset + aligned_size
+            // Rotate to get [offset, offset, aligned_size]
+            // Actually simpler: save offset first, then compute new watermark
+
+            // Let me restart with clearer logic:
+            // 1. aligned_size = (size + 7) & ~7  (already on stack)
+            // 2. current_offset = global[heap_watermark]
+            // 3. new_offset = current_offset + aligned_size
+            // 4. global[heap_watermark] = new_offset
+            // 5. return current_offset
+
+            // Clear and restart:
+            func_body.clearRetainingCapacity();
+            try self.writeLEB128(&func_body, 0); // no locals
+
+            // Load heap watermark (will be return value)
+            try func_body.append(self.allocator, 0x23); // global.get
+            try self.writeLEB128(&func_body, heap_watermark_idx);
+
+            // Compute aligned size: (param_0 + 7) & ~7
+            try func_body.append(self.allocator, 0x20); // local.get 0 (param $size)
+            try self.writeLEB128(&func_body, 0);
+            try func_body.append(self.allocator, 0x41); // i32.const 7
+            try self.writeLEB128(&func_body, 7);
+            try func_body.append(self.allocator, 0x6A); // i32.add
+            try func_body.append(self.allocator, 0x41); // i32.const -8
+            try self.writeLEB128(&func_body, @as(u32, @bitCast(@as(i32, -8))));
+            try func_body.append(self.allocator, 0x71); // i32.and
+
+            // Add to current watermark: new_watermark = current + aligned_size
+            try func_body.append(self.allocator, 0x23); // global.get heap_watermark
+            try self.writeLEB128(&func_body, heap_watermark_idx);
+            try func_body.append(self.allocator, 0x6A); // i32.add
+
+            // Store new watermark
+            try func_body.append(self.allocator, 0x24); // global.set
+            try self.writeLEB128(&func_body, heap_watermark_idx);
+
+            // Return old watermark (already on stack from first global.get)
+            // end
+            try func_body.append(self.allocator, 0x0B);
+
+            // 寫入函數體長度同內容
+            try self.writeLEB128(&section_payload, @intCast(func_body.items.len));
+            try section_payload.appendSlice(self.allocator, func_body.items);
+        }
 
         // 寫入 section 長度同內容
         try self.writeLEB128(module, @intCast(section_payload.items.len));
@@ -630,24 +762,31 @@ pub const WasmModuleBuilder = struct {
                     const bytes = @as([8]u8, @bitCast(f));
                     try code.appendSlice(self.allocator, &bytes);
                 } else {
-                    // Phase 3: Heap types (String, List, Map, Vector, Set, etc.)
-                    // For static strings: look up linear memory offset and push it
-                    // For other heap types: require runtime allocation (Phase 3b)
+                    // Phase 3b: Heap types (String, Vector, Map, etc.)
+                    // Now with runtime allocator, we encode proper Values
 
                     if (val.tag() == .string) {
-                        // Static string: push its linear memory offset
+                        // Static string: look up linear memory offset and encode as Value
                         const offset = self.string_offsets.get(instr.operand) orelse {
                             std.debug.print("[WASM ERROR] String constant at index {d} not in offset map\n", .{instr.operand});
                             return error.MissingStringOffset;
                         };
-                        // Push offset as f64 (PROVISIONAL: real impl should encode as Value) [refs: D-578, feature_deps.yaml#wasm/backend/linear_memory]
+
+                        // Import WasmLinearMemory for encodeOffset
+                        const WasmLinearMemory = @import("wasm_linear_memory.zig").WasmLinearMemory;
+                        const HeapTag = @import("../../runtime/value/value.zig").HeapTag;
+
+                        // Encode offset as proper Value (NaN-box with string tag)
+                        const string_value = WasmLinearMemory.encodeOffset(offset, HeapTag.string);
+                        const value_bits = @intFromEnum(string_value);
+
+                        // Push Value bits as f64
                         try code.append(self.allocator, 0x44); // f64.const
-                        const f: f64 = @floatFromInt(offset);
+                        const f: f64 = @bitCast(value_bits);
                         const bytes = @as([8]u8, @bitCast(f));
                         try code.appendSlice(self.allocator, &bytes);
                     } else {
-                        // Other heap types: not yet supported
-                        // PROVISIONAL: push passthrough bits [refs: D-578, feature_deps.yaml#wasm/backend/linear_memory]
+                        // Other heap types: passthrough for now (will use heap_alloc when opcodes land)
                         const bits_as_f64: f64 = @bitCast(val_int);
                         try code.append(self.allocator, 0x44); // f64.const
                         const bytes = @as([8]u8, @bitCast(bits_as_f64));

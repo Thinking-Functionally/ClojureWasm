@@ -57,8 +57,7 @@ pub const WasmLinearMemory = struct {
     /// Encode a linear memory offset as a Value with the given HeapTag.
     /// This replaces Value.encodeHeapPtr for Wasm backend.
     pub fn encodeOffset(offset: u32, ht: HeapTag) Value {
-        // PROVISIONAL: Encode offset in NaN-box bits where host pointer would go [refs: D-578, feature_deps.yaml#wasm/backend/linear_memory]
-        //
+        // Phase 3b: Encode offset in NaN-box bits where host pointer would go.
         // The NaN-box encoding expects an 8-byte-aligned host pointer.
         // For Wasm, we encode the 32-bit memory offset in the same bit positions.
         // This works because:
@@ -66,7 +65,7 @@ pub const WasmLinearMemory = struct {
         // 2. Offsets fit in 32 bits (Wasm linear memory is u32-addressed)
         // 3. Value.tag() discriminates heap vs immediate by top16 bits
         //
-        // Limitation: This encoding is WASM-ONLY and cannot interop with
+        // Note: This encoding is WASM-ONLY and cannot interop with
         // host-side Values (VM/TreeWalk encode real host pointers).
         // Cross-backend Value passing requires serialization.
 
