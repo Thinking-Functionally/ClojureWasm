@@ -1644,28 +1644,6 @@ active:
     barrier: |-
       tractable now; M-sized survey-first. Value rises with D-528 (real deps.edn corpus).
     last_reviewed: "2026-07-02"
-  - id: "D-577"
-    status: |-
-      DISCHARGED 2026-10-19 — two-pass CFG reconstruction landed on feature/wasm-aot-
-      compile-plus-fixes branch. Forward jumps now emit correct br depth indices:
-      Pass 1 pre-allocates labels for ALL jump targets (sorted); Pass 2 emits Wasm code
-      with guaranteed label availability. No more depth=0 placeholders.
-
-      Original issue (2026-10-19): Always-wrap+Block-per-target pattern did not handle
-      forward jumps — target IP's block label was not yet allocated when jump was
-      translated. Provisional markers removed; feature_deps.yaml#wasm/backend/
-      control_flow_forward_jump flipped to status: landed.
-    category: "wasm-backend"
-    barrier: |-
-      (discharged 2026-10-19) Two-pass algorithm implements CFG reconstruction without
-      dominator analysis — simpler and sufficient for ClojureWasm's BytecodeChunk flat
-      jump model. The Devil's-advocate Alt 2 (full dominator-based region analysis) was
-      F-002-aligned but over-provisioned; the two-pass shape achieves correct control flow
-      with lower complexity.
-      read ADR-TBD (the Devil's-advocate output embedded), implement Region Tracking
-      per Alt 2, replace depth=0 placeholders with correct computeBranchDepth calls,
-      remove PROVISIONAL markers (data/feature_deps.yaml#wasm/backend/control_flow_forward_jump).
-    last_reviewed: "2026-10-19"
 standing:
   - id: "D-549"
     status: |-
@@ -2887,6 +2865,15 @@ standing:
     barrier: "open after the D-440 arc completes (R4 + R5 must first rewrite the bulk of 'Phase N' citations to gap-area terms). Premature adoption = ~70 dangling citations with no 1:1 redirect. Trigger: D-440 R4/R5 done + a user nod to re-architect the planning axis (it is depth-4, the project's organizing metaphor)."
     last_reviewed: "2026-06-15"
 discharged:
+  - id: "D-577"
+    status: |-
+      DISCHARGED 2026-10-19 — two-pass CFG reconstruction landed on feature/wasm-aot-
+      compile-plus-fixes branch. Forward jumps now emit correct br depth indices:
+      Pass 1 pre-allocates labels for ALL jump targets (sorted); Pass 2 emits Wasm code
+      with guaranteed label availability. No more depth=0 placeholders.
+    category: "wasm-aot"
+    barrier: "Phase 13+ complete (need AOT compile infrastructure)."
+    last_reviewed: "2026-10-19"
   - id: "D-578"
     status: "DISCHARGED 2026-10-19. Phase 3b runtime allocator landed: heap_alloc(size) -> offset export callable from wasm code. Four PROVISIONAL markers removed: (1) wasm_linear_memory.zig encodeOffset now uses proper NaN-box encoding without provisional comment; (2) wasm_module_builder.zig writeDataSection comment updated to Phase 3b; (3) op_const string arm now encodes offset as proper Value via WasmLinearMemory.encodeOffset; (4) op_const non-string heap types passthrough comment clarified (will use heap_alloc when opcodes land)."
     category: "wasm-backend"
