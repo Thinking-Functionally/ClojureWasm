@@ -71,9 +71,10 @@
   cw-arcade) ARE archived as of 2026-08-12, and stay public.
 - **2026-08-12: the README declares ClojureWasm no longer maintained**
   (`1c8a9cbf`); the Sponsors badge, README footer line, and `.github/FUNDING.yml`
-  are gone with it. Wind-down context + the surveyed wording/transfer research:
-  memory `clojurewasm-wind-down-plan`, `private/notes/2026-08-11-{sunset-wording,
-  transfer-risk}-survey.md`.
+  are gone with it. Wind-down rationale (canonical form): commit `1c8a9cbf` message
+  + README text ("A from-scratch Clojure runtime is more than one person can
+  sustain"). Survey scratch (local-only, not in clone): `private/notes/2026-08-11-
+  {sunset-wording,transfer-risk}-survey.md`.
 - 2026-08-11/12: Discussions #12/#13/#14 (BuddhiLW) answered in code — three
   fix branches cherry-picked with authorship preserved, each one's CLASS then
   swept and fenced. #12 repr-misread → 3 more live bugs (multimethod isa? at 9

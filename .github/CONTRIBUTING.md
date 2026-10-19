@@ -18,7 +18,14 @@
 ## Building and testing
 
 Everything here is current and verified — it is the same gate the final release
-was cut on.
+was cut on. **What a bare clone needs**: [flake.nix](../flake.nix) pins Zig 0.16.0
+(via `direnv allow` or `nix develop`), [build.zig.zon](../build.zig.zon) fetches
+zwasm + zlinter by URL+hash (no sibling checkout), the main build + test suite run
+from that clone. **Optional for full maintainer workflow**: `/opt/homebrew/bin/clj`
+(the corpus-diff oracle; test suite skips when absent), `md-table-align` (advisory
+markdown table formatter; hook does not block commits), and `~/Documents/OSS/`
+reference clones (for Step-0 textbook surveys; gitignored `.claude/settings.local.json`
+`additionalDirectories` names them).
 
 ```sh
 direnv allow                              # one-time: load Zig 0.16.0 via Nix (or: nix develop)
