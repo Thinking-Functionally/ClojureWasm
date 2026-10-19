@@ -544,8 +544,13 @@ pub const WasmModuleBuilder = struct {
             .op_dup => {
                 // Duplicate top of stack
                 // Stack: [x] → [x x]
-                try code.append(self.allocator, 0x20); // local.get 0
-                try code.append(self.allocator, 0x00);
+                // Wasm has no native dup; use local.tee + local.get
+                const num_user_locals = self.num_locals - 2;
+                const tmp_idx = num_user_locals;  // Use first temp local
+                try code.append(self.allocator, 0x22); // local.tee (set + keep on stack)
+                try self.writeLEB128(code, tmp_idx);
+                try code.append(self.allocator, 0x20); // local.get (duplicate)
+                try self.writeLEB128(code, tmp_idx);
             },
             .op_add => {
                 // f64.add
@@ -648,21 +653,70 @@ pub const WasmModuleBuilder = struct {
             },
 
             // Fusion comparison-branch opcodes (Group 2)
-            .op_branch_ge_local_const, .op_branch_ge_locals => {
-                // ge comparison + conditional branch
-                // Stack: [a b] → [] (branch if a >= b)
+            // These combine a comparison + conditional branch
+            // _local_const: local compared with stack value
+            // _locals: two locals compared
+            .op_branch_ge_local_const => {
+                // ge: local >= stack_top → branch if true
+                // Stack: [b] → []
+                const local_idx = @as(u32, instr.operand);
+                try code.append(self.allocator, 0x20); // local.get local_a
+                try self.writeLEB128(code, local_idx);
+                // Now stack: [b a], need f64.ge → [a >= b]
                 try code.append(self.allocator, 0xC6); // f64.ge
                 try code.append(self.allocator, 0x0D); // br_if 0
                 try self.writeLEB128(code, 0);
             },
-            .op_branch_gt_local_const, .op_branch_gt_locals => {
-                // gt comparison + conditional branch
+            .op_branch_ge_locals => {
+                // ge: local_a >= local_b → branch if true
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0xC6); // f64.ge
+                try code.append(self.allocator, 0x0D); // br_if 0
+                try self.writeLEB128(code, 0);
+            },
+            .op_branch_gt_local_const => {
+                // gt: local > stack_top → branch if true
+                const local_idx = @as(u32, instr.operand);
+                try code.append(self.allocator, 0x20); // local.get local_a
+                try self.writeLEB128(code, local_idx);
                 try code.append(self.allocator, 0xC5); // f64.gt
                 try code.append(self.allocator, 0x0D); // br_if 0
                 try self.writeLEB128(code, 0);
             },
-            .op_branch_ne_local_const, .op_branch_ne_locals => {
-                // ne comparison + conditional branch
+            .op_branch_gt_locals => {
+                // gt: local_a > local_b → branch if true
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0xC5); // f64.gt
+                try code.append(self.allocator, 0x0D); // br_if 0
+                try self.writeLEB128(code, 0);
+            },
+            .op_branch_ne_local_const => {
+                // ne: local != stack_top → branch if true
+                const local_idx = @as(u32, instr.operand);
+                try code.append(self.allocator, 0x20); // local.get local_a
+                try self.writeLEB128(code, local_idx);
+                try code.append(self.allocator, 0xC2); // f64.ne
+                try code.append(self.allocator, 0x0D); // br_if 0
+                try self.writeLEB128(code, 0);
+            },
+            .op_branch_ne_locals => {
+                // ne: local_a != local_b → branch if true
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
                 try code.append(self.allocator, 0xC2); // f64.ne
                 try code.append(self.allocator, 0x0D); // br_if 0
                 try self.writeLEB128(code, 0);
@@ -687,36 +741,284 @@ pub const WasmModuleBuilder = struct {
                 try self.writeLEB128(code, local_b);
                 try code.append(self.allocator, 0xA0); // f64.add
             },
-            .op_mul_local_const, .op_mul_locals => {
-                // Simplified: treat as generic mul (TBD)
+            .op_sub_local_const => {
+                // sub with one arg from local: local - stack_top
+                // Stack: [b] → [(local_a - b)]
+                const local_idx = @as(u32, instr.operand);
+                const num_user_locals = self.num_locals - 2;
+                const tmp_b_idx = num_user_locals;
+
+                // Stack: [b] after previous ops
+                try code.append(self.allocator, 0x21); // local.set tmp_b (save b)
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0x20); // local.get local_a
+                try self.writeLEB128(code, local_idx);
+                try code.append(self.allocator, 0x20); // local.get tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA1); // f64.sub
+            },
+            .op_sub_locals => {
+                // sub with both args from locals
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0xA1); // f64.sub
+            },
+            .op_mul_local_const => {
+                // mul with one arg from local
+                const local_idx = @as(u32, instr.operand);
+                try code.append(self.allocator, 0x20); // local.get
+                try self.writeLEB128(code, local_idx);
                 try code.append(self.allocator, 0xA2); // f64.mul
             },
-            .op_mod_local_const, .op_mod_locals => {
-                // Simplified: treat as generic mod
-                try code.append(self.allocator, 0x1C); // local.tee (reuse mod sequence)
-                try self.writeLEB128(code, self.num_locals);
-                try code.append(self.allocator, 0xA3);
-                try code.append(self.allocator, 0x9C);
-                try code.append(self.allocator, 0x20);
-                try code.append(self.allocator, 0xA2);
-                try code.append(self.allocator, 0xA1);
+            .op_mul_locals => {
+                // mul with both args from locals
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0xA2); // f64.mul
             },
-            .op_eq_local_const, .op_eq_locals,
-            .op_ge_local_const, .op_ge_locals,
-            .op_le_local_const, .op_le_locals,
-            .op_lt_local_const, .op_lt_locals,
-            .op_gt_local_const, .op_gt_locals => {
-                // Local-optimized comparison (TBD: all as generic)
-                // Each should inline local.get, but for now: assume args on stack
-                const cmp_code: u8 = switch (instr.opcode) {
-                    .op_eq_local_const, .op_eq_locals => 0xC1,
-                    .op_ge_local_const, .op_ge_locals => 0xC6,
-                    .op_le_local_const, .op_le_locals => 0xC4,
-                    .op_lt_local_const, .op_lt_locals => 0xC3,
-                    .op_gt_local_const, .op_gt_locals => 0xC5,
-                    else => unreachable,
-                };
-                try code.append(self.allocator, cmp_code);
+            .op_quot_local_const => {
+                // quot with one arg from local
+                const local_idx = @as(u32, instr.operand);
+                const num_user_locals = self.num_locals - 2;
+                const tmp_b_idx = num_user_locals;
+
+                try code.append(self.allocator, 0x21); // local.set tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0x20); // local.get local_a
+                try self.writeLEB128(code, local_idx);
+                try code.append(self.allocator, 0x20); // local.get tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA3); // f64.div
+                try code.append(self.allocator, 0x9A); // f64.trunc
+            },
+            .op_quot_locals => {
+                // quot with both args from locals
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0xA3); // f64.div
+                try code.append(self.allocator, 0x9A); // f64.trunc
+            },
+            .op_mod_local_const => {
+                // mod with one arg from local
+                // Requires temp locals for full a - (b * floor(a/b)) computation
+                const local_idx = @as(u32, instr.operand);
+                const num_user_locals = self.num_locals - 2;
+                const tmp_a_idx = num_user_locals;
+                const tmp_b_idx = num_user_locals + 1;
+
+                // Stack: [b] + local_a
+                try code.append(self.allocator, 0x21); // local.set tmp_b (save stack b)
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0x20); // local.get local_a
+                try self.writeLEB128(code, local_idx);
+                try code.append(self.allocator, 0x21); // local.set tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+
+                // Now compute: tmp_a - (tmp_b * floor(tmp_a / tmp_b))
+                try code.append(self.allocator, 0x20); // local.get tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA3); // f64.div
+                try code.append(self.allocator, 0x9C); // f64.floor
+                try code.append(self.allocator, 0x20); // local.get tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA2); // f64.mul
+                try code.append(self.allocator, 0xA1); // f64.sub
+            },
+            .op_mod_locals => {
+                // mod with both args from locals
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                const num_user_locals = self.num_locals - 2;
+                const tmp_a_idx = num_user_locals;
+                const tmp_b_idx = num_user_locals + 1;
+
+                // Load and save both
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x21); // local.set tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0x21); // local.set tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+
+                // Compute: tmp_a - (tmp_b * floor(tmp_a / tmp_b))
+                try code.append(self.allocator, 0x20); // local.get tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA3); // f64.div
+                try code.append(self.allocator, 0x9C); // f64.floor
+                try code.append(self.allocator, 0x20); // local.get tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA2); // f64.mul
+                try code.append(self.allocator, 0xA1); // f64.sub
+            },
+            .op_rem_local_const => {
+                // rem with one arg from local
+                const local_idx = @as(u32, instr.operand);
+                const num_user_locals = self.num_locals - 2;
+                const tmp_a_idx = num_user_locals;
+                const tmp_b_idx = num_user_locals + 1;
+
+                // Stack: [b] + local_a
+                try code.append(self.allocator, 0x21); // local.set tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0x20); // local.get local_a
+                try self.writeLEB128(code, local_idx);
+                try code.append(self.allocator, 0x21); // local.set tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+
+                // Compute: tmp_a - (trunc(tmp_a / tmp_b) * tmp_b)
+                try code.append(self.allocator, 0x20); // local.get tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA3); // f64.div
+                try code.append(self.allocator, 0x9A); // f64.trunc
+                try code.append(self.allocator, 0x20); // local.get tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA2); // f64.mul
+                try code.append(self.allocator, 0xA1); // f64.sub
+            },
+            .op_rem_locals => {
+                // rem with both args from locals
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                const num_user_locals = self.num_locals - 2;
+                const tmp_a_idx = num_user_locals;
+                const tmp_b_idx = num_user_locals + 1;
+
+                // Load and save both
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x21); // local.set tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0x21); // local.set tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+
+                // Compute: tmp_a - (trunc(tmp_a / tmp_b) * tmp_b)
+                try code.append(self.allocator, 0x20); // local.get tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA3); // f64.div
+                try code.append(self.allocator, 0x9A); // f64.trunc
+                try code.append(self.allocator, 0x20); // local.get tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA2); // f64.mul
+                try code.append(self.allocator, 0xA1); // f64.sub
+            },
+            // Non-fusion comparison opcodes (push result, don't branch)
+            .op_eq_local_const => {
+                // eq: local == stack_top → push 1.0 or 0.0
+                const local_idx = @as(u32, instr.operand);
+                try code.append(self.allocator, 0x20); // local.get
+                try self.writeLEB128(code, local_idx);
+                try code.append(self.allocator, 0xC1); // f64.eq
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s (i32 → f64)
+            },
+            .op_eq_locals => {
+                // eq: local_a == local_b → push 1.0 or 0.0
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0xC1); // f64.eq
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
+            },
+            .op_ge_local_const => {
+                const local_idx = @as(u32, instr.operand);
+                try code.append(self.allocator, 0x20); // local.get
+                try self.writeLEB128(code, local_idx);
+                try code.append(self.allocator, 0xC6); // f64.ge
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
+            },
+            .op_ge_locals => {
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0xC6); // f64.ge
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
+            },
+            .op_le_local_const => {
+                const local_idx = @as(u32, instr.operand);
+                try code.append(self.allocator, 0x20); // local.get
+                try self.writeLEB128(code, local_idx);
+                try code.append(self.allocator, 0xC4); // f64.le
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
+            },
+            .op_le_locals => {
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0xC4); // f64.le
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
+            },
+            .op_lt_local_const => {
+                const local_idx = @as(u32, instr.operand);
+                try code.append(self.allocator, 0x20); // local.get
+                try self.writeLEB128(code, local_idx);
+                try code.append(self.allocator, 0xC3); // f64.lt
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
+            },
+            .op_lt_locals => {
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0xC3); // f64.lt
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
+            },
+            .op_gt_local_const => {
+                const local_idx = @as(u32, instr.operand);
+                try code.append(self.allocator, 0x20); // local.get
+                try self.writeLEB128(code, local_idx);
+                try code.append(self.allocator, 0xC5); // f64.gt
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
+            },
+            .op_gt_locals => {
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0xC5); // f64.gt
                 try code.append(self.allocator, 0xB7); // f64.convert_i32_s
             },
 
@@ -837,31 +1139,6 @@ pub const WasmModuleBuilder = struct {
                 const zero: f64 = 0.0;
                 const bytes = @as([8]u8, @bitCast(zero));
                 try code.appendSlice(self.allocator, &bytes);
-            },
-
-            // Remaining local-optimized variants (Group 1 final sweep)
-            .op_sub_local_const, .op_sub_locals => {
-                // sub with local optimization
-                try code.append(self.allocator, 0xA1); // f64.sub (TBD: generic)
-            },
-            .op_quot_local_const, .op_quot_locals => {
-                // quot with local optimization
-                try code.append(self.allocator, 0xA3); // f64.div
-                try code.append(self.allocator, 0x9A); // f64.trunc
-            },
-            .op_rem_local_const, .op_rem_locals => {
-                // rem with local optimization
-                try code.append(self.allocator, 0xA3); // f64.div (reuse rem sequence)
-                try code.append(self.allocator, 0x9A);
-                try code.append(self.allocator, 0x1C);
-                try self.writeLEB128(code, self.num_locals);
-                try code.append(self.allocator, 0xA2);
-                try code.append(self.allocator, 0xA1);
-            },
-            .op_ne_local_const, .op_ne_locals => {
-                // ne with local optimization
-                try code.append(self.allocator, 0xC2); // f64.ne
-                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
             },
 
             // Binding frame ops
