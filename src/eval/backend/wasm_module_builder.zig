@@ -334,7 +334,14 @@ pub const WasmModuleBuilder = struct {
         defer func_body.deinit(self.allocator);
 
         // Locals 聲明 (先掃描需要幾多 locals)
-        self.num_locals = try self.scanLocals(chunk);
+        const user_locals = try self.scanLocals(chunk);
+
+        // Reserve extra temp locals for operations that need them:
+        // - op_mod needs 1 temp (to save b)
+        // - op_rem needs 1 temp (to save quot)
+        const needs_temp_locals = self.needsTempLocals(chunk);
+        const num_temp_locals: u32 = if (needs_temp_locals) 2 else 0;
+        self.num_locals = user_locals + num_temp_locals;
 
         // Local 聲明：num_locals 個 f64
         if (self.num_locals > 0) {
@@ -466,6 +473,16 @@ pub const WasmModuleBuilder = struct {
         return max_local;
     }
 
+    fn needsTempLocals(_: *WasmModuleBuilder, chunk: BytecodeChunk) bool {
+        for (chunk.instructions) |instr| {
+            switch (instr.opcode) {
+                .op_mod, .op_rem => return true,
+                else => {},
+            }
+        }
+        return false;
+    }
+
     fn translateInstruction(
         self: *WasmModuleBuilder,
         code: *std.ArrayList(u8),
@@ -543,32 +560,63 @@ pub const WasmModuleBuilder = struct {
                 try code.append(self.allocator, 0xA2);
             },
             .op_mod => {
-                // f64 modulo: a - (b * floor(a/b))
-                // Stack: [a b] → [a mod b]
-                try code.append(self.allocator, 0x1C); // local.tee $tmp_b
-                try self.writeLEB128(code, self.num_locals);
-                try code.append(self.allocator, 0xA3); // f64.div (a/b on stack)
+                // Clojure floorMod: a - (b * floor(a/b))
+                // Stack in: [a b], Stack out: [a mod b]
+                const num_user_locals = self.num_locals - 2;
+                const tmp_a_idx = num_user_locals;
+                const tmp_b_idx = num_user_locals + 1;
+
+                // Save both operands (stack pops in reverse: b first, then a)
+                try code.append(self.allocator, 0x21); // local.set $tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0x21); // local.set $tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+
+                // Compute a - (floor(a/b) * b)
+                try code.append(self.allocator, 0x20); // local.get $tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get $tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get $tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA3); // f64.div
                 try code.append(self.allocator, 0x9C); // f64.floor
                 try code.append(self.allocator, 0x20); // local.get $tmp_b
-                try code.append(self.allocator, 0xA2); // f64.mul (floor * b)
-                try code.append(self.allocator, 0xA1); // f64.sub (a - result)
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA2); // f64.mul
+                try code.append(self.allocator, 0xA1); // f64.sub
             },
             .op_quot => {
-                // Quotient (truncated division): trunc(a/b)
-                // Stack: [a b] → [quot]
+                // Quotient: trunc(a/b) — truncate toward zero
                 try code.append(self.allocator, 0xA3); // f64.div
                 try code.append(self.allocator, 0x9A); // f64.trunc
             },
             .op_rem => {
-                // Remainder (same as mod for positive; differs for negative)
-                // WASM f64 semantics: IEEE 754 remainder
-                // Stack: [a b] → [rem]
+                // Java-style remainder: a - (trunc(a/b) * b)
+                // Stack in: [a b], Stack out: [a rem b]
+                const num_user_locals = self.num_locals - 2;
+                const tmp_a_idx = num_user_locals;
+                const tmp_b_idx = num_user_locals + 1;
+
+                // Save both operands
+                try code.append(self.allocator, 0x21); // local.set $tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0x21); // local.set $tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+
+                // Compute a - (trunc(a/b) * b)
+                try code.append(self.allocator, 0x20); // local.get $tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get $tmp_a
+                try self.writeLEB128(code, tmp_a_idx);
+                try code.append(self.allocator, 0x20); // local.get $tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
                 try code.append(self.allocator, 0xA3); // f64.div
                 try code.append(self.allocator, 0x9A); // f64.trunc
-                try code.append(self.allocator, 0x1C); // local.tee $quot
-                try self.writeLEB128(code, self.num_locals);
-                try code.append(self.allocator, 0xA2); // f64.mul (quot * b)
-                try code.append(self.allocator, 0xA1); // f64.sub (a - quot*b)
+                try code.append(self.allocator, 0x20); // local.get $tmp_b
+                try self.writeLEB128(code, tmp_b_idx);
+                try code.append(self.allocator, 0xA2); // f64.mul
+                try code.append(self.allocator, 0xA1); // f64.sub
             },
             .op_ge => {
                 // f64.ge
@@ -590,19 +638,13 @@ pub const WasmModuleBuilder = struct {
                 try code.append(self.allocator, 0x0C); // br
                 try self.writeLEB128(code, 0);
             },
-            .op_branch_true => {
-                // Conditional branch if top of stack is truthy
-                // Stack: [cond] → []
-                // STUB: stub — br_if 0
+            .op_jump_if_false => {
+                // Conditional branch if top of stack is falsey
+                // Stack: [cond] → [] (branch if cond is false)
+                // STUB: needs truthiness check + br_if
+                // Stub: br_if 0 (Wasm br_if branches on non-zero i32)
                 try code.append(self.allocator, 0x0D); // br_if
                 try self.writeLEB128(code, 0);
-            },
-            .op_branch_false => {
-                // Conditional branch if top of stack is falsey
-                // Stack: [cond] → []
-                // STUB: needs NOT + br_if or dedicated logic
-                // Stub: drop (ignore condition)
-                try code.append(self.allocator, 0x1A); // drop
             },
 
             // Fusion comparison-branch opcodes (Group 2)
@@ -638,7 +680,7 @@ pub const WasmModuleBuilder = struct {
             .op_add_locals => {
                 // add with both args from locals
                 const local_a = @as(u32, instr.operand & 0xFFFF);
-                const local_b = @as(u32, instr.operand >> 16);
+                const local_b = @as(u32, @as(u32, instr.operand) >> 16);
                 try code.append(self.allocator, 0x20); // local.get a
                 try self.writeLEB128(code, local_a);
                 try code.append(self.allocator, 0x20); // local.get b
@@ -704,10 +746,6 @@ pub const WasmModuleBuilder = struct {
                 // Push exception handler (try-catch setup)
                 // STUB: no-op stub
             },
-            .op_handler => {
-                // Exception handler block
-                // STUB: no-op stub
-            },
             .op_push_cleanup => {
                 // Push cleanup frame (finally)
                 // STUB: no-op stub
@@ -728,10 +766,6 @@ pub const WasmModuleBuilder = struct {
             },
             .op_letfn_patch => {
                 // Patch mutual-recursive letfn bindings
-                // STUB: no-op stub
-            },
-            .op_binding_frame => {
-                // Create dynamic binding frame
                 // STUB: no-op stub
             },
             .op_push_binding_frame => {

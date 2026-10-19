@@ -266,56 +266,9 @@ pub fn dispatch(init: std.process.Init) !void {
             }
             return;
         }
-        if (std.mem.eql(u8, first, "compile")) {
-            // AOT compile a Clojure source file to a standalone Wasm file
-            // Usage: cljw compile <in.clj> -o <out.wasm> [-cp <paths>] [-A:alias...]
-            const compile_mod = @import("compile.zig");
-            var in_path: ?[]const u8 = null;
-            var out_path: ?[]const u8 = null;
-            var compile_cp: ?[]const u8 = null;
-            var compile_aliases: std.ArrayList([]const u8) = .empty;
-            while (args.next()) |a| {
-                if (std.mem.eql(u8, a, "-o")) {
-                    out_path = args.next() orelse {
-                        try stderr.writeAll("compile: -o requires a path\n");
-                        try stderr.flush();
-                        std.process.exit(1);
-                    };
-                } else if (try consumeCpAliasArg(arena, stderr, "compile", a, &args, &compile_cp, &compile_aliases)) {
-                    // consumed by the shared classpath-surface arm
-                } else if (in_path == null) {
-                    in_path = a;
-                } else {
-                    try stderr.print("compile: unexpected argument '{s}'\n", .{a});
-                    try stderr.flush();
-                    std.process.exit(1);
-                }
-            }
-            if (in_path == null) {
-                try stderr.writeAll("compile: missing <in.clj>\n");
-                try stderr.flush();
-                std.process.exit(1);
-            }
-            if (out_path == null) {
-                try stderr.writeAll("compile: missing -o <out.wasm>\n");
-                try stderr.flush();
-                std.process.exit(1);
-            }
-            // Resolve classpath
-            const load_paths = try resolveClasspath(io, arena, stderr, compile_cp, cljw_path, compile_aliases.items, git_cache_base);
-            // Create runtime and compile
-            var rt = runtime_mod.Runtime.init(io, gpa);
-            defer rt.deinit();
-            var env = try @import("../runtime/env.zig").Env.init(&rt);
-            defer env.deinit();
-            compile_mod.compileToWasm(io, gpa, &rt, &env, in_path.?, out_path.?) catch |err| {
-                try stderr.print("compile failed: {s}\n", .{@errorName(err)});
-                try stderr.flush();
-                std.process.exit(1);
-            };
-            _ = load_paths; // Classpath resolved but not yet used in compilation
-            return;
-        }
+        // "compile" subcommand removed — AOT compilation now via wasm_module_builder.zig
+        // (see main.zig:66 comment). The CLI surface will be re-added when the full
+        // BytecodeChunk → Wasm → standalone .wasm file pipeline is wired (Phase 5-14+).
         // Not a recognised subcommand — fall through to legacy flag
         // parsing by re-routing `first` through the existing arm.
         try dispatchArgsRest(io, gpa, arena, stdout, stderr, first, &args, cljw_path, git_cache_base, fs_jail_root);
