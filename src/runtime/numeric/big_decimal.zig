@@ -854,22 +854,6 @@ pub fn allocSqrt(rt: *Runtime, v: Value, precision: u32, mode: i64) !Value {
     return allocFromManagedScale(rt, &result, result_scale);
 }
 
-/// Round a BigDecimal to `precision` total significant digits with `mode`.
-/// Internal helper for allocSqrt. Mode is i64 ordinal (0=UP, 1=DOWN, etc.).
-fn roundToPrecision(rt: *Runtime, v: Value, precision: u32, mode: i64) !Value {
-    _ = rt;
-    _ = mode;
-    const vd = v.decodePtr(*const BigDecimal);
-
-    // Count current significant digits
-    const digits = countDigits(vd.unscaled.m.toConst());
-    if (digits <= precision) return v;  // Already within precision
-
-    // TODO: implement rounding per RoundingMode
-    // For now, return as-is (will cause test failures but compiles)
-    return v;
-}
-
 /// Count decimal digits in a big integer (helper for roundToPrecision).
 fn countDigits(m: std.math.big.int.Const) u32 {
     if (m.eqlZero()) return 1;

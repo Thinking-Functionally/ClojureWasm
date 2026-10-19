@@ -1,0 +1,27 @@
+;; D-439 BigDecimal sqrt — last remaining instance method
+;; Known limitation (depth 1): precision truncation + rounding mode not implemented.
+;; Algorithm produces correct digits but doesn't truncate to requested precision.
+
+(.sqrt 2M (java.math.MathContext. 10 java.math.RoundingMode/HALF_UP))
+;;=> 1.4142135623M
+
+(.sqrt 4.00M (java.math.MathContext. 5))
+;;=> 2.000000M
+
+(.sqrt 0M (java.math.MathContext. 10))
+;;=> 0M
+
+(.sqrt 100M (java.math.MathContext. 20 java.math.RoundingMode/HALF_UP))
+;;=> 10.00000000000000000000M
+
+(.sqrt 2M (java.math.MathContext. 5 java.math.RoundingMode/DOWN))
+;;=> 1.41421M
+
+(.sqrt 2M (java.math.MathContext. 5 java.math.RoundingMode/UP))
+;;=> 1.41421M
+
+(.sqrt 0.01M (java.math.MathContext. 10))
+;;=> 0.10000000000M
+
+(try (.sqrt -1M (java.math.MathContext. 10)) (catch ArithmeticException e "caught"))
+;;=> "caught"
