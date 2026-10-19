@@ -163,7 +163,7 @@ malformed_markers() {
 
 # Does the range's file list include feature_deps.yaml?
 range_touches_yaml() {
-  git diff --name-only "$1" 2>/dev/null | grep -qE '^feature_deps\.yaml$'
+  git diff --name-only "$1" 2>/dev/null | grep -qE '^(data/)?feature_deps\.yaml$'
 }
 
 # Does the range's file list include .dev/debt.yaml?
