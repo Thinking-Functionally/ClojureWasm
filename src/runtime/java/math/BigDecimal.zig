@@ -441,6 +441,21 @@ fn doubleValueFn(rt: *Runtime, env: *Env, args: []const Value, loc: SourceLocati
     return Value.initFloat(big_decimal.toFloat(args[0]));
 }
 
+/// `(.sqrt bd mc)` — square root (JVM `BigDecimal.sqrt(MathContext)`).
+fn sqrtFn(rt: *Runtime, env: *Env, args: []const Value, loc: SourceLocation) anyerror!Value {
+    _ = env;
+    try error_catalog.checkArity("sqrt", args, 2, loc);
+    try requireBd(args[0], "sqrt", loc);
+    const mc = mathContextOf(args[1]) orelse
+        return error_catalog.raise(.type_arg_invalid, loc, .{ .fn_name = "sqrt", .expected = "a MathContext", .actual = @tagName(args[1].tag()) });
+
+    return big_decimal.allocSqrt(rt, args[0], mc.precision, mc.mode) catch |e| switch (e) {
+        error.NegativeSquareRoot => return error_catalog.raise(.negative_square_root, loc, .{}),
+        error.InvalidRoundingMode => return error_catalog.raise(.type_arg_invalid, loc, .{ .fn_name = "sqrt", .expected = "a valid rounding mode (0-8)", .actual = "an unknown rounding mode" }),
+        else => e,
+    };
+}
+
 /// `(.movePointLeft bd n)` — `bd ÷ 10ⁿ` (scale +n; JVM `BigDecimal.movePointLeft`).
 fn movePointLeftFn(rt: *Runtime, env: *Env, args: []const Value, loc: SourceLocation) anyerror!Value {
     _ = env;
@@ -536,6 +551,7 @@ pub fn installNativeMethods(rt: *Runtime) !void {
         .{ "intValue", &intValueFn },
         .{ "longValue", &longValueFn },
         .{ "doubleValue", &doubleValueFn },
+        .{ "sqrt", &sqrtFn },
     };
     const entries = try gpa.alloc(type_descriptor.TypeDescriptor.MethodEntry, specs.len);
     inline for (specs, 0..) |spec, i| {

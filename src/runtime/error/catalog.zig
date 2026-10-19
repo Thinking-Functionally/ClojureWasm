@@ -306,6 +306,7 @@ pub const Code = enum {
     integer_overflow,
     non_terminating_decimal,
     rounding_necessary,
+    negative_square_root,
 
     // --- Metadata (with-meta) ---
     /// `with-meta`'s metadata arg was not a map or nil. args: `.{ .actual = "..." }`.
@@ -1512,6 +1513,11 @@ pub fn entry(comptime code: Code) Entry {
             .kind = .arithmetic_error,
             .phase = .eval,
             .template = "Rounding necessary",
+        },
+        .negative_square_root => .{
+            .kind = .arithmetic_error,
+            .phase = .eval,
+            .template = "Attempted square root of negative BigDecimal",
         },
 
         // --- Eval (arity) ---
