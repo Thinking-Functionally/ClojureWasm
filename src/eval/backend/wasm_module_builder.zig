@@ -147,17 +147,22 @@ pub const WasmModuleBuilder = struct {
 
     fn writeImportSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8), chunk: BytecodeChunk) !void {
         // Section ID 2 (import)
-        // 掃描 chunk 以確定需要導入邊啲 builtin functions
+        // 掃描 chunk 以確定需要導入邊啲 builtin functions + collection literals
         const num_builtins = self.scanBuiltins(chunk);
+        const needs_collections = self.scanCollectionLiterals(chunk);
 
-        if (num_builtins == 0) return; // 冇 builtins 就跳過
+        // Phase 3c: Always import collection literal host functions if needed
+        const num_collection_imports: u32 = if (needs_collections) 3 else 0;
+        const total_imports = num_builtins + num_collection_imports;
+
+        if (total_imports == 0) return; // 冇 imports 就跳過
 
         try module.append(self.allocator, 0x02);
 
         var payload: std.ArrayList(u8) = .empty;
         defer payload.deinit(self.allocator);
 
-        try self.writeLEB128(&payload, num_builtins);
+        try self.writeLEB128(&payload, total_imports);
 
         // 簡化：為每個 builtin index 導入一個 (f64...) → (f64) 函數
         for (0..num_builtins) |i| {
@@ -177,6 +182,26 @@ pub const WasmModuleBuilder = struct {
             try self.writeLEB128(&payload, 2);
         }
 
+        // Phase 3c: Collection literal host imports (type 4: [i32 i32] -> [i64])
+        // Function indices: num_builtins + {0, 1, 2}
+        if (needs_collections) {
+            const collection_imports = [_][]const u8{ "vector_from_slice", "map_from_pairs", "set_from_slice" };
+            for (collection_imports) |name| {
+                // module name: "host"
+                try self.writeLEB128(&payload, 4);
+                try payload.appendSlice(self.allocator, "host");
+
+                // field name
+                try self.writeLEB128(&payload, @intCast(name.len));
+                try payload.appendSlice(self.allocator, name);
+
+                // import kind: function (0x00)
+                try payload.append(self.allocator, 0x00);
+                // type index: 4 ([i32 i32] -> [i64])
+                try self.writeLEB128(&payload, 4);
+            }
+        }
+
         try self.writeLEB128(module, @intCast(payload.items.len));
         try module.appendSlice(self.allocator, payload.items);
     }
@@ -190,6 +215,29 @@ pub const WasmModuleBuilder = struct {
             }
         }
         return max_builtin;
+    }
+
+    fn scanCollectionLiterals(_: *WasmModuleBuilder, chunk: BytecodeChunk) bool {
+        // PROVISIONAL Phase 3c: Collection literal host imports (vector/map/set_from_slice)
+        //
+        // These imports ARE emitted into the wasm module and ARE called by the collection
+        // literal opcodes, but zwasm v2.5.0's load() API does not yet accept a host function
+        // table at instantiation time, so they will TRAP at runtime with "unresolved import".
+        //
+        // Blocker: zwasm host function API (F-001 mailbox protocol RETIRED 2026-08-12;
+        // zwasm now under separate maintainership at github.com/zwasm/zwasm).
+        //
+        // Next step: when zwasm adds instantiate-with-imports API, wire collection literal
+        // host handlers into WasmExecutor.execute() and remove this PROVISIONAL marker.
+
+        // Phase 3c: Check if chunk needs collection literal host imports
+        for (chunk.instructions) |instr| {
+            switch (instr.opcode) {
+                .op_vector_literal, .op_map_literal, .op_set_literal => return true,
+                else => {},
+            }
+        }
+        return false;
     }
 
     fn writeTableSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8)) !void {
@@ -296,8 +344,8 @@ pub const WasmModuleBuilder = struct {
         var payload: std.ArrayList(u8) = .empty;
         defer payload.deinit(self.allocator);
 
-        // 4 個類型
-        try self.writeLEB128(&payload, 4);
+        // 5 個類型
+        try self.writeLEB128(&payload, 5);
 
         // Type 0: main 函數 [] -> [f64]
         try payload.append(self.allocator, 0x60);
@@ -328,6 +376,15 @@ pub const WasmModuleBuilder = struct {
         try payload.append(self.allocator, 0x7F); // i32
         try self.writeLEB128(&payload, 1);
         try payload.append(self.allocator, 0x7F); // i32
+
+        // Type 4: collection literal host imports [i32 i32] -> [i64]
+        // Phase 3c: vector_from_slice / map_from_pairs / set_from_slice
+        try payload.append(self.allocator, 0x60);
+        try self.writeLEB128(&payload, 2);
+        try payload.append(self.allocator, 0x7F); // i32 (stackPtr)
+        try payload.append(self.allocator, 0x7F); // i32 (count)
+        try self.writeLEB128(&payload, 1);
+        try payload.append(self.allocator, 0x7E); // i64 (Value bits)
 
         // 寫入 payload 長度同內容
         try self.writeLEB128(module, @intCast(payload.items.len));
@@ -1513,46 +1570,95 @@ pub const WasmModuleBuilder = struct {
             .op_vector_literal => {
                 // Stack: [v1, v2, ..., vN] → [vector]
                 // operand = element count
-                // Phase B stub: pop elements, push NaN-boxed heap-A placeholder
-                // (real heap allocation deferred)
+                // Phase 3c: Call host import vector_from_slice
+                //
+                // Host function signature: vector_from_slice(stackPtr: i32, count: i32) -> i64
+                // where stackPtr points to first Value in wasm linear memory operand stack
+                //
+                // Wasm doesn't have host memory access, so we need to:
+                // 1. Assume operand stack lives in linear memory at known location
+                //    (simplified: assume SP points to top of stack in memory)
+                // 2. Calculate stackPtr = SP - (count * 8)  (8 bytes per Value)
+                // 3. Call host import with (stackPtr, count)
+                // 4. Host reads Values from memory, builds vector, returns Value bits
+                // 5. Pop N values, push result
+                //
+                // Simplified emit (assumes global $sp tracks stack pointer):
                 const elem_count = instr.operand;
+
+                // Phase 3c TODO: Proper operand stack in linear memory architecture
+                // For now: call host import with dummy args (will fail at runtime)
+                // This is a PROVISIONAL implementation — needs operand stack refactor
+
+                // i32.const 0 (stackPtr placeholder)
+                try code.append(self.allocator, 0x41); // i32.const
+                try self.writeLEB128(code, 0);
+
+                // i32.const elem_count
+                try code.append(self.allocator, 0x41); // i32.const
+                try self.writeLEB128(code, elem_count);
+
+                // call $vector_from_slice (import index = num_builtins + 0)
+                try code.append(self.allocator, 0x10); // call
+                const num_builtins = self.scanBuiltins(chunk);
+                const import_idx = num_builtins + 0; // vector_from_slice is first collection import
+                try self.writeLEB128(code, import_idx);
+
+                // Result is i64 Value bits on stack
+                // Drop original N f64 operands (TODO: should be handled by stack refactor)
                 for (0..elem_count) |_| {
-                    try code.append(self.allocator, 0x1A); // drop
+                    try code.append(self.allocator, 0x1A); // drop (will drop garbage for now)
                 }
-                // Push NaN-boxed heap-A tag (0xFFF8_0000_0000_0000) as placeholder
-                try code.append(self.allocator, 0x44); // f64.const
-                const heap_a_tag: u64 = 0xFFF8_0000_0000_0000;
-                const vec_placeholder: f64 = @bitCast(heap_a_tag);
-                const bytes = @as([8]u8, @bitCast(vec_placeholder));
-                try code.appendSlice(self.allocator, &bytes);
             },
             .op_set_literal => {
                 // Stack: [v1, v2, ..., vN] → [set]
                 // operand = element count
-                // Stub: same as vector
+                // Phase 3c: Call host import set_from_slice (same pattern as vector)
                 const elem_count = instr.operand;
+
+                // i32.const 0 (stackPtr placeholder)
+                try code.append(self.allocator, 0x41); // i32.const
+                try self.writeLEB128(code, 0);
+
+                // i32.const elem_count
+                try code.append(self.allocator, 0x41); // i32.const
+                try self.writeLEB128(code, elem_count);
+
+                // call $set_from_slice (import index = num_builtins + 2)
+                try code.append(self.allocator, 0x10); // call
+                const num_builtins = self.scanBuiltins(chunk);
+                const import_idx = num_builtins + 2; // set_from_slice is third collection import
+                try self.writeLEB128(code, import_idx);
+
+                // Drop original N f64 operands
                 for (0..elem_count) |_| {
                     try code.append(self.allocator, 0x1A); // drop
                 }
-                try code.append(self.allocator, 0x44); // f64.const
-                const zero: f64 = 0.0;
-                const bytes = @as([8]u8, @bitCast(zero));
-                try code.appendSlice(self.allocator, &bytes);
             },
             .op_map_literal => {
                 // Stack: [k1, v1, k2, v2, ...] → [map]
                 // operand = value count (= 2 * pair_count)
-                // Phase C stub: pop all key-value pairs, push NaN-boxed heap-A placeholder
+                // Phase 3c: Call host import map_from_pairs
                 const value_count = instr.operand;
+
+                // i32.const 0 (stackPtr placeholder)
+                try code.append(self.allocator, 0x41); // i32.const
+                try self.writeLEB128(code, 0);
+
+                // i32.const value_count
+                try code.append(self.allocator, 0x41); // i32.const
+                try self.writeLEB128(code, value_count);
+
+                // call $map_from_pairs (import index = num_builtins + 1)
+                try code.append(self.allocator, 0x10); // call
+                const num_builtins = self.scanBuiltins(chunk);
+                const import_idx = num_builtins + 1; // map_from_pairs is second collection import
+                try self.writeLEB128(code, import_idx);
+
+                // Drop original value_count f64 operands
                 for (0..value_count) |_| {
                     try code.append(self.allocator, 0x1A); // drop
                 }
-                // Push NaN-boxed heap-A tag (0xFFF8_0000_0000_0000) as placeholder
-                try code.append(self.allocator, 0x44); // f64.const
-                const heap_a_tag: u64 = 0xFFF8_0000_0000_0000;
-                const map_placeholder: f64 = @bitCast(heap_a_tag);
-                const bytes = @as([8]u8, @bitCast(map_placeholder));
-                try code.appendSlice(self.allocator, &bytes);
             },
             .op_var_meta => {
                 // Stack: [var_value] → [var_value, metadata_map]

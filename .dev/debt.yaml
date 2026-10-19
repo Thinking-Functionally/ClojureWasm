@@ -24,6 +24,16 @@
 # md-table-align no longer pads it to ~800 KB of whitespace.
 
 active:
+  - id: "D-579"
+    status: "open (2026-10-19, wasm collection literals Phase 3c). WASM module builder emits collection literal host imports (vector_from_slice / map_from_pairs / set_from_slice) and op_vector_literal / op_map_literal / op_set_literal call them, but zwasm v2.5.0 load() API does not accept host function table at instantiation. Runtime will trap on unresolved import."
+    category: "wasm"
+    barrier: |-
+      blocked-by: zwasm host function API. F-001 mailbox protocol RETIRED
+      2026-08-12 (zwasm moved to separate org github.com/zwasm/zwasm). When
+      zwasm adds instantiate-with-imports API, wire collection literal host
+      handlers into WasmExecutor.execute() and remove PROVISIONAL marker from
+      wasm_module_builder.zig scanCollectionLiterals().
+    last_reviewed: "2026-10-19"
   - id: "D-574"
     status: "open (2026-08-06, ADR-0184 residual). reify's anonymous TypeDescriptor is trackHeap'd per EVALUATION (lang/primitive/protocol.zig makeReifyDescriptor path) — the same immortality shape ADR-0184 killed for Functions, in miniature: a reify form evaluated in a loop grows persistent_marks + leaks a TD per iteration. The fix shape mirrors ADR-0184: make the anonymous TD (or a TD cell) collectable, instance-mediated trace already exists (traceReifiedInstance); audit method_table readers for a dead-TD window first (freeReifyDescriptor currently only touches names)."
     category: "gc"
