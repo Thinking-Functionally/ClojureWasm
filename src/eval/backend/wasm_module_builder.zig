@@ -524,6 +524,12 @@ pub const WasmModuleBuilder = struct {
                 // drop
                 try code.append(self.allocator, 0x1A);
             },
+            .op_dup => {
+                // Duplicate top of stack
+                // Stack: [x] → [x x]
+                try code.append(self.allocator, 0x20); // local.get 0
+                try code.append(self.allocator, 0x00);
+            },
             .op_add => {
                 // f64.add
                 try code.append(self.allocator, 0xA0);
@@ -537,9 +543,309 @@ pub const WasmModuleBuilder = struct {
                 try code.append(self.allocator, 0xA2);
             },
             .op_mod => {
-                // f64.rem (WASM 冇 mod，用 - (/ * floor) 模擬)
-                // 簡化：暫時唔支援，返回 UnsupportedOpcode
-                return BuildError.UnsupportedOpcode;
+                // f64 modulo: a - (b * floor(a/b))
+                // Stack: [a b] → [a mod b]
+                try code.append(self.allocator, 0x1C); // local.tee $tmp_b
+                try self.writeLEB128(code, self.num_locals);
+                try code.append(self.allocator, 0xA3); // f64.div (a/b on stack)
+                try code.append(self.allocator, 0x9C); // f64.floor
+                try code.append(self.allocator, 0x20); // local.get $tmp_b
+                try code.append(self.allocator, 0xA2); // f64.mul (floor * b)
+                try code.append(self.allocator, 0xA1); // f64.sub (a - result)
+            },
+            .op_quot => {
+                // Quotient (truncated division): trunc(a/b)
+                // Stack: [a b] → [quot]
+                try code.append(self.allocator, 0xA3); // f64.div
+                try code.append(self.allocator, 0x9A); // f64.trunc
+            },
+            .op_rem => {
+                // Remainder (same as mod for positive; differs for negative)
+                // WASM f64 semantics: IEEE 754 remainder
+                // Stack: [a b] → [rem]
+                try code.append(self.allocator, 0xA3); // f64.div
+                try code.append(self.allocator, 0x9A); // f64.trunc
+                try code.append(self.allocator, 0x1C); // local.tee $quot
+                try self.writeLEB128(code, self.num_locals);
+                try code.append(self.allocator, 0xA2); // f64.mul (quot * b)
+                try code.append(self.allocator, 0xA1); // f64.sub (a - quot*b)
+            },
+            .op_ge => {
+                // f64.ge
+                try code.append(self.allocator, 0xC6);
+                // Convert i32 result to f64 (0.0 or 1.0)
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
+            },
+            .op_le => {
+                // f64.le
+                try code.append(self.allocator, 0xC4);
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
+            },
+
+            // Phase 5-14: Advanced opcodes
+            .op_jump => {
+                // Unconditional branch
+                // operand = target bytecode offset (TBD: needs label resolution)
+                // Wasm br takes a depth index; single-block stub: br 0 (break current block)
+                try code.append(self.allocator, 0x0C); // br
+                try self.writeLEB128(code, 0);
+            },
+            .op_branch_true => {
+                // Conditional branch if top of stack is truthy
+                // Stack: [cond] → []
+                // STUB: stub — br_if 0
+                try code.append(self.allocator, 0x0D); // br_if
+                try self.writeLEB128(code, 0);
+            },
+            .op_branch_false => {
+                // Conditional branch if top of stack is falsey
+                // Stack: [cond] → []
+                // STUB: needs NOT + br_if or dedicated logic
+                // Stub: drop (ignore condition)
+                try code.append(self.allocator, 0x1A); // drop
+            },
+
+            // Fusion comparison-branch opcodes (Group 2)
+            .op_branch_ge_local_const, .op_branch_ge_locals => {
+                // ge comparison + conditional branch
+                // Stack: [a b] → [] (branch if a >= b)
+                try code.append(self.allocator, 0xC6); // f64.ge
+                try code.append(self.allocator, 0x0D); // br_if 0
+                try self.writeLEB128(code, 0);
+            },
+            .op_branch_gt_local_const, .op_branch_gt_locals => {
+                // gt comparison + conditional branch
+                try code.append(self.allocator, 0xC5); // f64.gt
+                try code.append(self.allocator, 0x0D); // br_if 0
+                try self.writeLEB128(code, 0);
+            },
+            .op_branch_ne_local_const, .op_branch_ne_locals => {
+                // ne comparison + conditional branch
+                try code.append(self.allocator, 0xC2); // f64.ne
+                try code.append(self.allocator, 0x0D); // br_if 0
+                try self.writeLEB128(code, 0);
+            },
+
+            // Local-optimized arithmetic variants (Group 1 continued)
+            .op_add_local_const => {
+                // add with one arg from local
+                // PERF: inline local.get + f64.add [refs: O-TBD]
+                const local_idx = @as(u32, instr.operand);
+                try code.append(self.allocator, 0x20); // local.get
+                try self.writeLEB128(code, local_idx);
+                try code.append(self.allocator, 0xA0); // f64.add
+            },
+            .op_add_locals => {
+                // add with both args from locals
+                const local_a = @as(u32, instr.operand & 0xFFFF);
+                const local_b = @as(u32, instr.operand >> 16);
+                try code.append(self.allocator, 0x20); // local.get a
+                try self.writeLEB128(code, local_a);
+                try code.append(self.allocator, 0x20); // local.get b
+                try self.writeLEB128(code, local_b);
+                try code.append(self.allocator, 0xA0); // f64.add
+            },
+            .op_mul_local_const, .op_mul_locals => {
+                // Simplified: treat as generic mul (TBD)
+                try code.append(self.allocator, 0xA2); // f64.mul
+            },
+            .op_mod_local_const, .op_mod_locals => {
+                // Simplified: treat as generic mod
+                try code.append(self.allocator, 0x1C); // local.tee (reuse mod sequence)
+                try self.writeLEB128(code, self.num_locals);
+                try code.append(self.allocator, 0xA3);
+                try code.append(self.allocator, 0x9C);
+                try code.append(self.allocator, 0x20);
+                try code.append(self.allocator, 0xA2);
+                try code.append(self.allocator, 0xA1);
+            },
+            .op_eq_local_const, .op_eq_locals,
+            .op_ge_local_const, .op_ge_locals,
+            .op_le_local_const, .op_le_locals,
+            .op_lt_local_const, .op_lt_locals,
+            .op_gt_local_const, .op_gt_locals => {
+                // Local-optimized comparison (TBD: all as generic)
+                // Each should inline local.get, but for now: assume args on stack
+                const cmp_code: u8 = switch (instr.opcode) {
+                    .op_eq_local_const, .op_eq_locals => 0xC1,
+                    .op_ge_local_const, .op_ge_locals => 0xC6,
+                    .op_le_local_const, .op_le_locals => 0xC4,
+                    .op_lt_local_const, .op_lt_locals => 0xC3,
+                    .op_gt_local_const, .op_gt_locals => 0xC5,
+                    else => unreachable,
+                };
+                try code.append(self.allocator, cmp_code);
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
+            },
+
+            // Group 3: Collections (get/nth + exceptions)
+            .op_get => {
+                // (get coll key [default])
+                // STUB: call import function $builtin_get
+                try code.append(self.allocator, 0x10); // call
+                try self.writeLEB128(code, 0); // import idx (placeholder)
+            },
+            .op_nth => {
+                // (nth coll index [default])
+                // STUB: call import function $builtin_nth
+                try code.append(self.allocator, 0x10); // call
+                try self.writeLEB128(code, 1); // import idx (placeholder)
+            },
+            .op_throw => {
+                // throw exception
+                // STUB: Wasm has no native exceptions; use unreachable
+                try code.append(self.allocator, 0x00); // unreachable
+            },
+            .op_reraise => {
+                // re-throw caught exception
+                try code.append(self.allocator, 0x00); // unreachable
+            },
+            .op_push_handler => {
+                // Push exception handler (try-catch setup)
+                // STUB: no-op stub
+            },
+            .op_handler => {
+                // Exception handler block
+                // STUB: no-op stub
+            },
+            .op_push_cleanup => {
+                // Push cleanup frame (finally)
+                // STUB: no-op stub
+            },
+            .op_recur_loop => {
+                // recur loop marker
+                // STUB: no-op (loop structure handled elsewhere)
+            },
+
+            // Group 4: Closures & function objects
+            .op_make_fn => {
+                // Create closure object
+                // STUB: push 0.0 (placeholder fn handle)
+                try code.append(self.allocator, 0x44); // f64.const
+                const zero: f64 = 0.0;
+                const bytes = @as([8]u8, @bitCast(zero));
+                try code.appendSlice(self.allocator, &bytes);
+            },
+            .op_letfn_patch => {
+                // Patch mutual-recursive letfn bindings
+                // STUB: no-op stub
+            },
+            .op_binding_frame => {
+                // Create dynamic binding frame
+                // STUB: no-op stub
+            },
+            .op_push_binding_frame => {
+                // Push binding frame onto stack
+                // STUB: no-op stub
+            },
+
+            // Group 5: Interop (JVM-style calls)
+            .op_ctor_call => {
+                // Constructor call
+                // STUB: unsupported — push 0.0
+                try code.append(self.allocator, 0x44); // f64.const 0.0
+                const zero: f64 = 0.0;
+                const bytes = @as([8]u8, @bitCast(zero));
+                try code.appendSlice(self.allocator, &bytes);
+            },
+            .op_method_call => {
+                // Instance method call
+                // STUB: unsupported — push 0.0
+                try code.append(self.allocator, 0x44);
+                const zero: f64 = 0.0;
+                const bytes = @as([8]u8, @bitCast(zero));
+                try code.appendSlice(self.allocator, &bytes);
+            },
+            .op_static_method_call => {
+                // Static method call
+                // STUB: unsupported — push 0.0
+                try code.append(self.allocator, 0x44);
+                const zero: f64 = 0.0;
+                const bytes = @as([8]u8, @bitCast(zero));
+                try code.appendSlice(self.allocator, &bytes);
+            },
+            .op_set_field => {
+                // Set instance field
+                // STUB: no-op stub
+            },
+
+            // Group 6: Namespace ops
+            .op_in_ns => {
+                // Switch to namespace
+                // STUB: no-op stub
+            },
+            .op_ns_with_refer_clojure => {
+                // ns with refer-clojure
+                // STUB: no-op stub
+            },
+            .op_ns_with_filter => {
+                // ns with :only/:exclude filter
+                // STUB: no-op stub
+            },
+            .op_ns_import => {
+                // ns import statement
+                // STUB: no-op stub
+            },
+
+            // Type checking / pattern matching
+            .op_match_class => {
+                // Match JVM class
+                // STUB: push false (0.0)
+                try code.append(self.allocator, 0x44);
+                const zero: f64 = 0.0;
+                const bytes = @as([8]u8, @bitCast(zero));
+                try code.appendSlice(self.allocator, &bytes);
+            },
+            .op_match_type_keyword => {
+                // Match type keyword (:int/:string/etc)
+                // STUB: push false (0.0)
+                try code.append(self.allocator, 0x44);
+                const zero: f64 = 0.0;
+                const bytes = @as([8]u8, @bitCast(zero));
+                try code.appendSlice(self.allocator, &bytes);
+            },
+
+            // Remaining local-optimized variants (Group 1 final sweep)
+            .op_sub_local_const, .op_sub_locals => {
+                // sub with local optimization
+                try code.append(self.allocator, 0xA1); // f64.sub (TBD: generic)
+            },
+            .op_quot_local_const, .op_quot_locals => {
+                // quot with local optimization
+                try code.append(self.allocator, 0xA3); // f64.div
+                try code.append(self.allocator, 0x9A); // f64.trunc
+            },
+            .op_rem_local_const, .op_rem_locals => {
+                // rem with local optimization
+                try code.append(self.allocator, 0xA3); // f64.div (reuse rem sequence)
+                try code.append(self.allocator, 0x9A);
+                try code.append(self.allocator, 0x1C);
+                try self.writeLEB128(code, self.num_locals);
+                try code.append(self.allocator, 0xA2);
+                try code.append(self.allocator, 0xA1);
+            },
+            .op_ne_local_const, .op_ne_locals => {
+                // ne with local optimization
+                try code.append(self.allocator, 0xC2); // f64.ne
+                try code.append(self.allocator, 0xB7); // f64.convert_i32_s
+            },
+
+            // Binding frame ops
+            .op_pop_binding_frame => {
+                // Pop binding frame
+                // STUB: no-op stub
+            },
+            .op_pop_handler => {
+                // Pop exception handler
+                // STUB: no-op stub
+            },
+
+            // Collection accessors
+            .op_nth2 => {
+                // (nth coll index) — 2-arg variant without default
+                // STUB: call import $builtin_nth (same as op_nth)
+                try code.append(self.allocator, 0x10); // call
+                try self.writeLEB128(code, 1);
             },
 
             // Phase 1: Variables

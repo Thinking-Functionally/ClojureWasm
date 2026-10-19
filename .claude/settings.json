@@ -1,7 +1,7 @@
 {
-  "defaultMode": "acceptEdits",
-  "outputStyle": "Japanese",
-  "model": "claude-opus-4-8",
+  "env": {
+    "ZIG_LOCAL_CACHE_DIR": ".zig-cache"
+  },
   "permissions": {
     "allow": [
       "Agent",
@@ -29,7 +29,11 @@
       "ExitWorktree",
       "ListMcpResourcesTool",
       "ReadMcpResourceTool",
-      "RemoteTrigger"
+      "RemoteTrigger",
+      "Bash(git worktree *)",
+      "Bash(./zig-out/bin/cljw --backend=wasm -e '\\(def x 42\\) x')",
+      "Bash(./zig-out/bin/cljw -h)",
+      "Bash(awk '{print $1}')"
     ],
     "deny": [
       "Bash(git push --force:*)",
@@ -43,19 +47,7 @@
       "Bash(rm -rf .git:*)"
     ]
   },
-  "env": {
-    "ZIG_LOCAL_CACHE_DIR": ".zig-cache"
-  },
-  "enabledPlugins": {
-    "figma@claude-plugins-official": false,
-    "slack@claude-plugins-official": false,
-    "notion@claude-plugins-official": false,
-    "chrome-devtools-mcp@claude-plugins-official": false,
-    "playwright@claude-plugins-official": false
-  },
-  "disabledMcpServers": [
-    "datadog-mcp"
-  ],
+  "model": "claude-opus-4-8",
   "hooks": {
     "SessionStart": [
       {
@@ -158,5 +150,17 @@
         ]
       }
     ]
-  }
+  },
+  "enabledPlugins": {
+    "figma@claude-plugins-official": false,
+    "slack@claude-plugins-official": false,
+    "notion@claude-plugins-official": false,
+    "chrome-devtools-mcp@claude-plugins-official": false,
+    "playwright@claude-plugins-official": false
+  },
+  "outputStyle": "Japanese",
+  "defaultMode": "acceptEdits",
+  "disabledMcpServers": [
+    "datadog-mcp"
+  ]
 }

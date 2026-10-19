@@ -63,7 +63,7 @@ test "kindToExitCode maps internal_error → 70 and others → 1 (ADR-0019)" {
 // src/, add them here so the unified `zig build test` discovers them.
 test {
     _ = @import("app/cli.zig");
-    _ = @import("app/compile.zig");
+    // compile.zig removed — AOT compilation now via wasm_module_builder.zig
     _ = @import("app/repl/line_editor.zig");
     _ = @import("app/deps/parse.zig");
     _ = @import("app/deps/resolve.zig");
