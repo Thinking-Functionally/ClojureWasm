@@ -42,7 +42,18 @@
       "Bash(timeout 120 bash test/run_all.sh --smoke wasm_module_builder)",
       "Bash(bash test/run_all.sh --smoke wasm_module_builder)",
       "Bash(yq '.[] | select\\(.name == \"wasm/backend/linear_memory\"\\)' data/feature_deps.yaml)",
-      "Bash(bash scripts/check_provisional_sync.sh --help)"
+      "Bash(bash scripts/check_provisional_sync.sh --help)",
+      "Bash(bash test/run_all.sh --smoke wasm)",
+      "Bash(yq '.active[] | select\\(.id | test\\(\"wasm|Wasm|WASM\"\\)\\) | .id + \": \" + .status' .dev/debt.yaml)",
+      "Bash(yq '.active[] | select\\(.id == \"D-565\"\\) | .status' .dev/debt.yaml)",
+      "Bash(yq '.active[] | select\\(.id == \"D-577\"\\)' .dev/debt.yaml)",
+      "Bash(gtimeout 120 zig build test -Dwasm -Doptimize=ReleaseSafe)",
+      "Bash(tee /tmp/test_output.log)",
+      "Bash(wasm-validate /tmp/test.wasm)",
+      "Bash(echo \"Validation failed with code $?\")",
+      "Bash(xxd /tmp/test.wasm)",
+      "Bash(tee /tmp/test_sleb128.log)",
+      "Bash(tee /tmp/test_sleb128_full.log)"
     ],
     "deny": [
       "Bash(git push --force:*)",

@@ -24,6 +24,16 @@
 # md-table-align no longer pads it to ~800 KB of whitespace.
 
 active:
+  - id: "D-580"
+    status: "open (2026-10-19, wasm collection accessors Phase 3d). WASM module builder emits collection accessor host imports (cljw_get_2/3 / cljw_nth_2/3) and op_get / op_nth / op_nth2 call them, but zwasm v2.5.0 load() API does not accept host function table at instantiation. Runtime will trap on unresolved import."
+    category: "wasm"
+    barrier: |-
+      blocked-by: same as D-579 — zwasm host function API. When zwasm adds
+      instantiate-with-imports, wire collection accessor host handlers
+      (intrinsic.fastGet / fastNth3 / fastNth2) into WasmExecutor.execute()
+      and remove PROVISIONAL marker from wasm_module_builder.zig
+      scanCollectionAccessors().
+    last_reviewed: "2026-10-19"
   - id: "D-579"
     status: "open (2026-10-19, wasm collection literals Phase 3c). WASM module builder emits collection literal host imports (vector_from_slice / map_from_pairs / set_from_slice) and op_vector_literal / op_map_literal / op_set_literal call them, but zwasm v2.5.0 load() API does not accept host function table at instantiation. Runtime will trap on unresolved import."
     category: "wasm"

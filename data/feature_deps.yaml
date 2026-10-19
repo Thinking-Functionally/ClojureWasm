@@ -720,6 +720,31 @@ entries:
       now call heap_alloc when those opcodes land. All four PROVISIONAL markers
       removed; D-578 discharged.
 
+  - name: wasm/backend/collection_accessors
+    kind: subsystem
+    defined_in: src/eval/backend/wasm_module_builder.zig
+    status: provisional
+    requires_features: []
+    requires_debts:
+      - D-580
+    provisional_markers:
+      - src/eval/backend/wasm_module_builder.zig:295 (scanCollectionAccessors PROVISIONAL comment)
+    notes: |
+      Phase 3d (collection accessors) PARTIAL 2026-10-19:
+      WASM module builder emits collection accessor host imports (cljw_get_2/3,
+      cljw_nth_2/3) and op_get / op_nth / op_nth2 call them, but zwasm v2.5.0
+      load() API does not accept host function table at instantiation time.
+      Runtime will trap on unresolved import.
+
+      Blocker: same as Phase 3c — zwasm host function API (F-001 mailbox protocol
+      RETIRED 2026-08-12; zwasm moved to separate org github.com/zwasm/zwasm).
+
+      When zwasm adds instantiate-with-imports API, wire collection accessor host
+      handlers (intrinsic.fastGet / fastNth3 / fastNth2) into WasmExecutor.execute()
+      and remove PROVISIONAL marker.
+
+      Tracked: D-580.
+
   - name: clojure.core/Throwable->map
     kind: var
     defined_in: src/lang/clj/clojure/core.clj
