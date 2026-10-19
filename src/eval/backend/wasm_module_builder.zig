@@ -372,7 +372,7 @@ pub const WasmModuleBuilder = struct {
         try module.appendSlice(self.allocator, section_payload.items);
     }
 
-    /// 帶控制流結構嘅指令翻譯
+    /// 帶控制流結構嘅指令翻譯 (two-pass: collect targets → emit structured code)
     fn translateWithControlFlow(
         self: *WasmModuleBuilder,
         code: *std.ArrayList(u8),
@@ -382,9 +382,26 @@ pub const WasmModuleBuilder = struct {
         var block_stack = BlockStack.init(self.allocator);
         defer block_stack.deinit();
 
-        // IP → label 映射 (第二遍分配 label)
+        // IP → label 映射 (pre-allocated for ALL targets in Pass 1)
         var ip_to_label = std.AutoHashMap(usize, u32).init(self.allocator);
         defer ip_to_label.deinit();
+
+        // Pass 1: Pre-allocate labels for ALL jump targets (including forward jumps)
+        // This ensures ip_to_label.get(target_ip) never returns null
+        var next_label: u32 = 0;
+        var sorted_targets = std.ArrayList(usize).init(self.allocator);
+        defer sorted_targets.deinit();
+
+        var target_iter = cf_analysis.jump_targets.keyIterator();
+        while (target_iter.next()) |target_ip| {
+            try sorted_targets.append(target_ip.*);
+        }
+        std.mem.sort(usize, sorted_targets.items, {}, std.sort.asc(usize));
+
+        for (sorted_targets.items) |target_ip| {
+            try ip_to_label.put(target_ip, next_label);
+            next_label += 1;
+        }
 
         // 檢查係咪有 recur (需要外層 loop)
         const has_recur = cf_analysis.loop_starts.count() > 0;
@@ -393,17 +410,24 @@ pub const WasmModuleBuilder = struct {
             try code.append(self.allocator, 0x03); // loop
             try code.append(self.allocator, 0x7C); // result type: f64
             const loop_label = try block_stack.push(.loop, 0);
+            // Override label 0 with loop label
             try ip_to_label.put(0, loop_label);
         }
 
+        // Pass 2: Emit Wasm code with blocks at target IPs
         for (chunk.instructions, 0..) |instr, ip| {
             // 檢查當前 IP 係咪跳轉目標 → 插入 block
-            if (cf_analysis.jump_targets.contains(ip)) {
-                // block (result type: [] → [])
-                try code.append(self.allocator, 0x02); // block
-                try code.append(self.allocator, 0x40); // void
-                const label = try block_stack.push(.block, ip);
-                try ip_to_label.put(ip, label);
+            if (ip_to_label.get(ip)) |pre_label| {
+                if (has_recur and ip == 0) {
+                    // Already emitted loop at IP 0
+                } else {
+                    // block (result type: [] → [])
+                    try code.append(self.allocator, 0x02); // block
+                    try code.append(self.allocator, 0x40); // void
+                    const label = try block_stack.push(.block, ip);
+                    // Verify label matches pre-allocated
+                    std.debug.assert(label == pre_label);
+                }
             }
 
             // 翻譯指令
@@ -411,11 +435,10 @@ pub const WasmModuleBuilder = struct {
                 .op_jump => {
                     // 計算目標 IP
                     const target_ip = try cf_analysis.computeJumpTarget(ip, instr.operand);
-                    // 揾目標 block label
-                    // PROVISIONAL: forward jumps use depth=0 placeholder (structurally incorrect); Region Tracking with dominator analysis required [refs: D-577, feature_deps.yaml#wasm/backend/control_flow_forward_jump]
-                    const target_label = ip_to_label.get(target_ip) orelse 0;
+                    // 揾目標 block label (guaranteed to exist after Pass 1)
+                    const target_label = ip_to_label.get(target_ip).?;
                     // br <depth>
-                    const depth = if (target_label == 0) 0 else block_stack.computeBranchDepth(target_label) orelse 0;
+                    const depth = block_stack.computeBranchDepth(target_label) orelse return BuildError.UnsupportedOpcode;
                     try code.append(self.allocator, 0x0C); // br
                     try self.writeLEB128(code, depth);
                 },
@@ -423,9 +446,9 @@ pub const WasmModuleBuilder = struct {
                     // stack: [cond] → []
                     // if cond == 0, jump to target
                     const target_ip = try cf_analysis.computeJumpTarget(ip, instr.operand);
-                    // PROVISIONAL: forward jumps use depth=0 placeholder (structurally incorrect); Region Tracking with dominator analysis required [refs: D-577, feature_deps.yaml#wasm/backend/control_flow_forward_jump]
-                    const target_label = ip_to_label.get(target_ip) orelse 0;
-                    const depth = if (target_label == 0) 0 else block_stack.computeBranchDepth(target_label) orelse 0;
+                    // 揾目標 block label (guaranteed to exist after Pass 1)
+                    const target_label = ip_to_label.get(target_ip).?;
+                    const depth = block_stack.computeBranchDepth(target_label) orelse return BuildError.UnsupportedOpcode;
 
                     // i32.eqz (f64 → i32 cast + eqz)
                     try code.append(self.allocator, 0xAA); // i32.trunc_f64_s

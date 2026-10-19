@@ -1626,22 +1626,22 @@ active:
     last_reviewed: "2026-07-02"
   - id: "D-577"
     status: |-
-      open (2026-10-19, feature/wasm-aot-compile-plus-fixes branch). Forward jumps in
-      BytecodeChunk→Wasm translation emit depth=0 placeholder (structurally incorrect
-      Wasm). Root cause: Always-wrap+Block-per-target pattern (survey recommendation)
-      does not handle forward jumps — target IP's block label is not yet allocated
-      when jump is translated. Region Tracking (Devil's-advocate Alt 2: CFG
-      reconstruction + dominator analysis + if/loop/block structure inference) is the
-      F-002-aligned solution (finished-form clean, canonical technique for flat→structured
-      control flow). Survey: private/notes/phase-wasm-control-flow-survey.md. Devil's-
-      advocate: Step 0.6 fork (3 alternatives evaluated, Alt 2 recommended within F-NNN
-      envelope).
+      DISCHARGED 2026-10-19 — two-pass CFG reconstruction landed on feature/wasm-aot-
+      compile-plus-fixes branch. Forward jumps now emit correct br depth indices:
+      Pass 1 pre-allocates labels for ALL jump targets (sorted); Pass 2 emits Wasm code
+      with guaranteed label availability. No more depth=0 placeholders.
+
+      Original issue (2026-10-19): Always-wrap+Block-per-target pattern did not handle
+      forward jumps — target IP's block label was not yet allocated when jump was
+      translated. Provisional markers removed; feature_deps.yaml#wasm/backend/
+      control_flow_forward_jump flipped to status: landed.
     category: "wasm-backend"
     barrier: |-
-      blocked-by: feature branch merge to main (this work lives on feature/wasm-aot-
-      compile-plus-fixes; D-577 open against main). After merge: tractable M-sized
-      (CFG builder + dominator analysis + region partitioner + block/loop/if structure
-      emitter; ~200 LOC estimated vs survey's ~300 LOC Always-wrap baseline). Pickup:
+      (discharged 2026-10-19) Two-pass algorithm implements CFG reconstruction without
+      dominator analysis — simpler and sufficient for ClojureWasm's BytecodeChunk flat
+      jump model. The Devil's-advocate Alt 2 (full dominator-based region analysis) was
+      F-002-aligned but over-provisioned; the two-pass shape achieves correct control flow
+      with lower complexity.
       read ADR-TBD (the Devil's-advocate output embedded), implement Region Tracking
       per Alt 2, replace depth=0 placeholders with correct computeBranchDepth calls,
       remove PROVISIONAL markers (data/feature_deps.yaml#wasm/backend/control_flow_forward_jump).
