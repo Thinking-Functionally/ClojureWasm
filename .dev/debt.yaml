@@ -24,6 +24,20 @@
 # md-table-align no longer pads it to ~800 KB of whitespace.
 
 active:
+  - id: "D-578"
+    status: "open (2026-10-19, wasm heap Phase 3a). Four PROVISIONAL markers in wasm backend: NaN-box offset encoding (wasm_linear_memory.zig:60), static-only data section (wasm_module_builder.zig:361), f64-cast offset push (644), passthrough for non-string heap types (651). All share a common blocker: Phase 3b runtime allocator unavailable (currently only static strings in data section; dynamic strings / other heap types need runtime bump allocator)."
+    category: "wasm-backend"
+    barrier: |-
+      blocked-by: Phase 3b runtime allocator (linear memory bump allocator
+      callable from wasm code at runtime). Phase 3a (static strings in data
+      section) landed; next unit is a runtime `heap_alloc(size) -> offset`
+      export. When that export exists, this row converts to 4 concrete rewrites
+      (op_str, op_vector, op_map, Value encoding/decoding). Tier 4.
+    first_raised: "2026-10-19"
+    last_reviewed: "2026-10-19"
+    refs: |-
+      src/eval/backend/wasm_linear_memory.zig encodeOffset comment;
+      src/eval/backend/wasm_module_builder.zig writeDataSection + op_const arms.
   - id: "D-574"
     status: "open (2026-08-06, ADR-0184 residual). reify's anonymous TypeDescriptor is trackHeap'd per EVALUATION (lang/primitive/protocol.zig makeReifyDescriptor path) — the same immortality shape ADR-0184 killed for Functions, in miniature: a reify form evaluated in a loop grows persistent_marks + leaks a TD per iteration. The fix shape mirrors ADR-0184: make the anonymous TD (or a TD cell) collectable, instance-mediated trace already exists (traceReifiedInstance); audit method_table readers for a dead-TD window first (freeReifyDescriptor currently only touches names)."
     category: "gc"

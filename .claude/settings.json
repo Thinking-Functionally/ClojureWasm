@@ -33,7 +33,16 @@
       "Bash(git worktree *)",
       "Bash(./zig-out/bin/cljw --backend=wasm -e '\\(def x 42\\) x')",
       "Bash(./zig-out/bin/cljw -h)",
-      "Bash(awk '{print $1}')"
+      "Bash(awk '{print $1}')",
+      "Bash(DROW=\"D-577\" S='DISCHARGED 2026-10-19 — two-pass CFG reconstruction landed; forward jumps emit correct br depth' yq -i '\\(.active[] | select\\(.id == strenv\\(DROW\\)\\) | .status\\) = strenv\\(S\\)' .dev/debt.yaml)",
+      "Bash(grep -qE '^feature_deps\\\\.yaml$')",
+      "Bash(grep -qE '^\\(data/\\)?feature_deps\\\\.yaml$')",
+      "Bash(awk '/wasm_module_builder\\\\.zig.*error:/{found=1} found{print; if\\(/^[^ ]/ && NR>1\\)exit}' /private/tmp/claude-501/-Users-Shared-Relocated-Items-Security-eUSB-sync-zig-projects-ClojureWasm/bf4c5362-e770-4426-810d-5c7c8937168a/tasks/b49225t6h.output)",
+      "Bash(yq -r '.active[].id, .standing[].id, .discharged[].id' .dev/debt.yaml)",
+      "Bash(timeout 120 bash test/run_all.sh --smoke wasm_module_builder)",
+      "Bash(bash test/run_all.sh --smoke wasm_module_builder)",
+      "Bash(yq '.[] | select\\(.name == \"wasm/backend/linear_memory\"\\)' data/feature_deps.yaml)",
+      "Bash(bash scripts/check_provisional_sync.sh --help)"
     ],
     "deny": [
       "Bash(git push --force:*)",

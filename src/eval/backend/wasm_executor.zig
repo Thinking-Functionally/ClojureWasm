@@ -96,7 +96,7 @@ test "WasmExecutor: init and deinit" {
     try testing.expect(true);
 }
 
-test "WasmExecutor: simple constant" {
+test "WasmExecutor: integer constant" {
     // Skip test when zwasm is not available (requires -Dwasm)
     if (!has_wasm) return error.SkipZigTest;
 
@@ -133,4 +133,54 @@ test "WasmExecutor: simple constant" {
     // Tier 3: zwasm returns Value.initInteger(42)
     const i = result.asInteger();
     try testing.expectEqual(@as(i48, 42), i);
+}
+
+test "WasmExecutor: string constant" {
+    // Skip test when zwasm is not available (requires -Dwasm)
+    if (!has_wasm) return error.SkipZigTest;
+
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    // Initialize Runtime for string allocation
+    const Runtime = @import("../../runtime/runtime.zig").Runtime;
+    const io = std.io.getStdIo();
+    var rt = try Runtime.init(io, allocator);
+    defer rt.deinit();
+
+    // Allocate a string Value
+    const string_val = try @import("../../runtime/collection/string.zig").alloc(&rt, "hello");
+
+    var executor = try WasmExecutor.init(allocator);
+    defer executor.deinit();
+
+    // BytecodeChunk: [(const "hello"), (ret)]
+    const instructions = try allocator.alloc(opcode_mod.WireInstr, 2);
+    defer allocator.free(instructions);
+    instructions[0] = .{ .opcode = .op_const, .operand = 0 };
+    instructions[1] = .{ .opcode = .op_ret, .operand = 0 };
+
+    const constants = try allocator.alloc(Value, 1);
+    defer allocator.free(constants);
+    constants[0] = string_val;
+
+    const chunk = BytecodeChunk{
+        .instructions = instructions,
+        .constants = constants,
+        .call_sites = &[_]opcode_mod.CallSiteEntry{},
+        .libspecs = &[_]opcode_mod.LibspecEntry{},
+        .ns_filters = &[_]opcode_mod.NsFilterEntry{},
+        .ctor_sites = &[_]opcode_mod.CtorEntry{},
+        .import_sites = &[_]opcode_mod.ImportPair{},
+        .source_file = "",
+    };
+
+    // Execute — currently FAILS because heap Value cannot pass through f64
+    const result = try executor.execute(chunk);
+
+    // Verify string content
+    try testing.expectEqual(Value.Tag.string, result.tag());
+    const str_mod = @import("../../runtime/collection/string.zig");
+    const result_str = str_mod.asString(result);
+    try testing.expectEqualStrings("hello", result_str);
 }

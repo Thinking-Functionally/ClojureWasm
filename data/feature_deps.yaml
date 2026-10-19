@@ -692,6 +692,31 @@ entries:
       clean, canonical technique). Close-out: D-577 lands Region Tracking → replace
       placeholder with correct depth calculation → remove markers.
 
+  - name: wasm/backend/linear_memory
+    kind: subsystem
+    defined_in: src/eval/backend/wasm_linear_memory.zig
+    status: provisional
+    requires_features: []
+    requires_debts:
+      - D-578
+    provisional_markers:
+      - "src/eval/backend/wasm_linear_memory.zig (encodeOffset: NaN-box offset encoding where host pointer would go)"
+      - "src/eval/backend/wasm_module_builder.zig (writeDataSection: static strings only, no runtime allocator)"
+      - "src/eval/backend/wasm_module_builder.zig (op_const heap types: push offset as f64)"
+      - "src/eval/backend/wasm_module_builder.zig (op_const non-string: passthrough bits)"
+    notes: |
+      Phase 3a (static string constants) landed 2026-10-19:
+      wasm_linear_memory.zig allocator + encodeOffset/decodeOffset helpers;
+      writeDataSection emits HeapHeader + string bytes into data section;
+      scanAndMapHeapConstants builds map of constant_index → linear_memory_offset;
+      op_const translation pushes offset for heap types instead of host pointer.
+
+      Phase 3b (runtime allocator): next unit is a wasm-callable
+      `heap_alloc(size) -> offset` export that bumps WasmLinearMemory.next_offset
+      at runtime. When that export lands, the four PROVISIONAL markers discharge:
+      op_str/op_vector/op_map use heap_alloc, Value encoding/decoding use real
+      offset representation (not f64 cast). Tier 4.
+
   - name: clojure.core/Throwable->map
     kind: var
     defined_in: src/lang/clj/clojure/core.clj

@@ -40,6 +40,9 @@ pub const WasmModuleBuilder = struct {
     linear_memory_size: u32,
     // Phase 4: function table for indirect calls
     function_table_size: u32,
+    // Maps constant pool index → linear memory offset for heap types
+    // (string constants live in data section at known offsets)
+    string_offsets: std.AutoHashMap(u16, u32),
 
     pub fn init(allocator: std.mem.Allocator) WasmModuleBuilder {
         return .{
@@ -49,11 +52,37 @@ pub const WasmModuleBuilder = struct {
             .num_globals = 0,
             .linear_memory_size = 65536, // 1 page = 64KB
             .function_table_size = 256,
+            .string_offsets = std.AutoHashMap(u16, u32).init(allocator),
         };
     }
 
     pub fn deinit(self: *WasmModuleBuilder) void {
         self.code.deinit(self.allocator);
+        self.string_offsets.deinit();
+    }
+
+    /// Scan chunk.constants for heap types and assign linear memory offsets.
+    /// Phase 3: Static strings only; dynamic allocation is Phase 3b.
+    fn scanAndMapHeapConstants(self: *WasmModuleBuilder, chunk: BytecodeChunk) !void {
+        var current_offset: u32 = 1024; // HEAP_START
+
+        for (chunk.constants, 0..) |val, idx| {
+            if (val.tag() != .string) continue;
+
+            // Decode string length (requires decoding the pointer)
+            const str_ptr = val.decodePtr([*]const u8);
+            const str_len = std.mem.len(str_ptr);
+
+            // Align offset to 8 bytes (HeapHeader requirement)
+            current_offset = std.mem.alignForward(u32, current_offset, 8);
+
+            // Map this constant pool index to its linear memory offset
+            try self.string_offsets.put(@intCast(idx), current_offset);
+
+            // Advance offset: HeapHeader (8 bytes) + string bytes
+            const total_size = 8 + str_len;
+            current_offset += @intCast(total_size);
+        }
     }
 
     /// 構建完整嘅 Wasm 模組
@@ -67,6 +96,9 @@ pub const WasmModuleBuilder = struct {
         for (chunk.instructions, 0..) |instr, i| {
             std.debug.print("  [{d}] {s} operand={d}\n", .{ i, @tagName(instr.opcode), instr.operand });
         }
+
+        // Phase 3: Scan constants and assign linear memory offsets for heap types
+        try self.scanAndMapHeapConstants(chunk);
 
         // Magic number + version
         try module.appendSlice(self.allocator, &[_]u8{ 0x00, 0x61, 0x73, 0x6D }); // "\0asm"
@@ -92,6 +124,9 @@ pub const WasmModuleBuilder = struct {
 
         // Export section: 導出 "main" 函數
         try self.writeExportSection(&module, chunk);
+
+        // Data section: pre-populate linear memory with string constants (Phase 3)
+        try self.writeDataSection(&module, chunk);
 
         // Code section: 函數體
         try self.writeCodeSection(&module, chunk);
@@ -319,6 +354,65 @@ pub const WasmModuleBuilder = struct {
         try module.appendSlice(self.allocator, payload.items);
     }
 
+    fn writeDataSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8), chunk: BytecodeChunk) !void {
+        // Section ID 11 (data)
+        // Pre-populate linear memory with string constants from chunk.constants[]
+
+        // PROVISIONAL: Static string constants only (no runtime allocator yet) [refs: D-578, feature_deps.yaml#wasm/backend/linear_memory]
+        //
+        // Emit data segments for each string constant using the offset map
+        // built by scanAndMapHeapConstants. Each segment contains:
+        // HeapHeader (8 bytes: tag + length) + string bytes.
+        //
+        // Limitation: This only handles STATIC strings (from constants pool).
+        // Dynamic strings (created at runtime via str, format, etc.) require
+        // a runtime allocator (Phase 3b).
+
+        try module.append(self.allocator, 0x0B); // section ID 11
+
+        var payload: std.ArrayList(u8) = .empty;
+        defer payload.deinit(self.allocator);
+
+        // Write number of data segments (= number of string constants)
+        const string_count = self.string_offsets.count();
+        try self.writeLEB128(&payload, @intCast(string_count));
+
+        // Emit each string as a data segment
+        for (chunk.constants, 0..) |val, idx| {
+            if (val.tag() != .string) continue;
+
+            const offset = self.string_offsets.get(@intCast(idx)).?;
+
+            // Decode string pointer from Value
+            const str_ptr = val.decodePtr([*]const u8);
+            const str_len = std.mem.len(str_ptr);
+
+            // Data segment: active (flags=0x00), memory 0, offset expression, data
+            try self.writeLEB128(&payload, 0x00); // Active segment, memory 0
+            try self.writeLEB128(&payload, 0);    // Memory index
+
+            // Offset expression: (i32.const offset) (end)
+            try payload.append(self.allocator, 0x41); // i32.const opcode
+            try self.writeLEB128(&payload, offset);
+            try payload.append(self.allocator, 0x0B); // end opcode
+
+            // Data: HeapHeader (8 bytes) + string bytes
+            const total_size = 8 + str_len;
+            try self.writeLEB128(&payload, @intCast(total_size));
+
+            // HeapHeader: tag (u32) + length (u32)
+            // tag = 0x01 for string (HeapTag enum value)
+            try self.writeU32(self, &payload, self.allocator, 0x01);
+            try self.writeU32(self, &payload, self.allocator, @intCast(str_len));
+
+            // String bytes
+            try payload.appendSlice(self.allocator, str_ptr[0..str_len]);
+        }
+
+        try self.writeLEB128(module, @intCast(payload.items.len));
+        try module.appendSlice(self.allocator, payload.items);
+    }
+
     fn writeCodeSection(self: *WasmModuleBuilder, module: *std.ArrayList(u8), chunk: BytecodeChunk) !void {
         // Section ID 10 (code)
         try module.append(self.allocator, 0x0A);
@@ -389,12 +483,12 @@ pub const WasmModuleBuilder = struct {
         // Pass 1: Pre-allocate labels for ALL jump targets (including forward jumps)
         // This ensures ip_to_label.get(target_ip) never returns null
         var next_label: u32 = 0;
-        var sorted_targets = std.ArrayList(usize).init(self.allocator);
-        defer sorted_targets.deinit();
+        var sorted_targets: std.ArrayList(usize) = .empty;
+        defer sorted_targets.deinit(self.allocator);
 
         var target_iter = cf_analysis.jump_targets.keyIterator();
         while (target_iter.next()) |target_ip| {
-            try sorted_targets.append(target_ip.*);
+            try sorted_targets.append(self.allocator, target_ip.*);
         }
         std.mem.sort(usize, sorted_targets.items, {}, std.sort.asc(usize));
 
@@ -537,15 +631,28 @@ pub const WasmModuleBuilder = struct {
                     try code.appendSlice(self.allocator, &bytes);
                 } else {
                     // Phase 3: Heap types (String, List, Map, Vector, Set, etc.)
-                    // 簡化實現：將 heap pointer 轉換為 f64
-                    // 真正實現需要 linear memory allocation + GC
-                    //
-                    // 暫時：將整個 64-bit Value 當 f64 pushstackStack
-                    // （唔正確但可以 passthrough）
-                    const bits_as_f64: f64 = @bitCast(val_int);
-                    try code.append(self.allocator, 0x44); // f64.const
-                    const bytes = @as([8]u8, @bitCast(bits_as_f64));
-                    try code.appendSlice(self.allocator, &bytes);
+                    // For static strings: look up linear memory offset and push it
+                    // For other heap types: require runtime allocation (Phase 3b)
+
+                    if (val.tag() == .string) {
+                        // Static string: push its linear memory offset
+                        const offset = self.string_offsets.get(instr.operand) orelse {
+                            std.debug.print("[WASM ERROR] String constant at index {d} not in offset map\n", .{instr.operand});
+                            return error.MissingStringOffset;
+                        };
+                        // Push offset as f64 (PROVISIONAL: real impl should encode as Value) [refs: D-578, feature_deps.yaml#wasm/backend/linear_memory]
+                        try code.append(self.allocator, 0x44); // f64.const
+                        const f: f64 = @floatFromInt(offset);
+                        const bytes = @as([8]u8, @bitCast(f));
+                        try code.appendSlice(self.allocator, &bytes);
+                    } else {
+                        // Other heap types: not yet supported
+                        // PROVISIONAL: push passthrough bits [refs: D-578, feature_deps.yaml#wasm/backend/linear_memory]
+                        const bits_as_f64: f64 = @bitCast(val_int);
+                        try code.append(self.allocator, 0x44); // f64.const
+                        const bytes = @as([8]u8, @bitCast(bits_as_f64));
+                        try code.appendSlice(self.allocator, &bytes);
+                    }
                 }
             },
             .op_load_local => {
@@ -1338,6 +1445,13 @@ pub const WasmModuleBuilder = struct {
                 try buffer.append(self.allocator, byte | 0x80);
             }
         }
+    }
+
+    /// Write a little-endian u32 (for HeapHeader fields in data section)
+    fn writeU32(_: *WasmModuleBuilder, buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u32) !void {
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &bytes, value, .little);
+        try buffer.appendSlice(allocator, &bytes);
     }
 };
 
