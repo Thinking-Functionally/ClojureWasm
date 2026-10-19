@@ -97,6 +97,9 @@ test "WasmExecutor: init and deinit" {
 }
 
 test "WasmExecutor: simple constant" {
+    // Skip test when zwasm is not available (requires -Dwasm)
+    if (!has_wasm) return error.SkipZigTest;
+
     const testing = std.testing;
     const allocator = testing.allocator;
 
