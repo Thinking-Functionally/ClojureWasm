@@ -41,3 +41,11 @@ private/
 .lsp/
 test/conformance/verified_projects/*/.cpcache/
 __pycache__/
+
+# Local subprojects (have their own git repos, not part of ClojureWasm)
+derivpricer/
+edgeaudit/
+officr/
+transformer/
+unifolios/
+DLAQE/
