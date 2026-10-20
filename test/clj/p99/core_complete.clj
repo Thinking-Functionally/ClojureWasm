@@ -152,10 +152,10 @@
   (if (= b 0) a (recur b (mod a b))))
 
 (defn p67-primes [n]
-  (let [sieve (fn [s]
-                (cons (first s)
-                      (lazy-seq (sieve (filter #(not= 0 (mod % (first s)))
-                                               (rest s))))))]
+  (letfn [(sieve [s]
+            (cons (first s)
+                  (lazy-seq (sieve (filter #(not= 0 (mod % (first s)))
+                                           (rest s))))))]
     (take n (sieve (iterate inc 2)))))
 
 (defn p69-merge-with [f & maps]

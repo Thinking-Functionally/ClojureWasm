@@ -29,7 +29,7 @@ result=$("$CLJW" -e "(count [1 2 3 4 5])")
 
 echo "P05: Reverse"
 result=$("$CLJW" -e "(reverse [1 2 3 4])")
-[[ "$result" == "[4 3 2 1]" ]] && echo "✅ Pass" || echo "❌ Fail: got $result"
+[[ "$result" == "(4 3 2 1)" ]] && echo "✅ Pass" || echo "❌ Fail: got $result"
 
 echo "P11: Addition"
 result=$("$CLJW" -e "(+ 10 5)")

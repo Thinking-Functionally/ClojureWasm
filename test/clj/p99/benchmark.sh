@@ -40,7 +40,7 @@ hyperfine \
   --runs 10 \
   --export-markdown "$RESULTS" \
   --command-name "TreeWalk" "$CLJW $TEST_FILE" \
-  --command-name "VM" "$CLJW -Dbackend=vm $TEST_FILE"
+  --command-name "VM" "$CLJW --backend=vm $TEST_FILE"
 
 echo
 echo "📊 Results saved to $RESULTS"

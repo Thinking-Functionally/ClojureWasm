@@ -39,7 +39,7 @@ mkdir -p "$LOG_DIR"
 
 echo -e "${BLUE}=== P99 Three-Backend Differential Test Suite ===${NC}"
 echo "Test file: $TEST_FILE"
-echo "Backends: TreeWalk (default), VM (-Dbackend=vm), Wasm (-Dbackend=wasm)"
+echo "Backends: TreeWalk (default), VM (--backend=vm), Wasm (--backend=wasm)"
 echo
 
 # Run TreeWalk backend
@@ -56,7 +56,7 @@ echo
 
 # Run VM backend
 echo -e "${YELLOW}[2/3] Running VM backend...${NC}"
-if "$CLJW" -Dbackend=vm "$TEST_FILE" > "$LOG_DIR/vm.log" 2>&1; then
+if "$CLJW" --backend=vm "$TEST_FILE" > "$LOG_DIR/vm.log" 2>&1; then
   VM_EXIT=0
   echo -e "${GREEN}✓ VM completed${NC}"
 else
@@ -68,7 +68,7 @@ echo
 
 # Run Wasm backend (if enabled)
 echo -e "${YELLOW}[3/3] Running Wasm backend...${NC}"
-if "$CLJW" -Dbackend=wasm "$TEST_FILE" > "$LOG_DIR/wasm.log" 2>&1; then
+if "$CLJW" --backend=wasm "$TEST_FILE" > "$LOG_DIR/wasm.log" 2>&1; then
   WASM_EXIT=0
   echo -e "${GREEN}✓ Wasm completed${NC}"
 else

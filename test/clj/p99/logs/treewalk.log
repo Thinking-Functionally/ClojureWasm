@@ -1,0 +1,9 @@
+Name error at core_complete.clj:157:33
+  Unable to resolve symbol: 'sieve'
+
+  155 |   (let [sieve (fn [s]
+  156 |                 (cons (first s)
+  157 |                       (lazy-seq (sieve (filter #(not= 0 (mod % (first s)))
+                                         ^--- Unable to resolve symbol: 'sieve'
+  158 |                                                (rest s))))))]
+  159 |     (take n (sieve (iterate inc 2)))))

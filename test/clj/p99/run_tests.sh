@@ -29,7 +29,7 @@ echo "📝 TreeWalk Backend"
 echo
 
 echo "🚀 VM Backend"
-"$CLJW" -Dbackend=vm "$TEST_FILE"
+"$CLJW" --backend=vm "$TEST_FILE"
 echo
 
 echo "✅ All backends complete"
