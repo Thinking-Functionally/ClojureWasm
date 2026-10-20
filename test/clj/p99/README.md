@@ -1,76 +1,132 @@
-# P99 Test Suite
+# P99: Ninety-Nine Clojure Problems
 
-Complete test suite for 99 Clojure problems, supporting differential testing across multiple backends.
+Complete differential test suite for TreeWalk/VM/Wasm backend validation.
 
-## Structure
+## Overview
+
+This directory implements the P-99 problem set (99 classic Clojure problems) for testing ClojureWasm's three execution backends:
+- **TreeWalk**: AST interpreter (reference implementation)
+- **VM**: Bytecode interpreter (production default)  
+- **Wasm**: AOT compiled WebAssembly (Phase 1-4 stubs)
+
+All backends must produce **identical results** - any discrepancy is a correctness bug.
+
+## Files
 
 ```
 test/clj/p99/
-├── core.clj              # All 99 problem implementations + tests
-├── benchmark.sh          # Performance comparison script (hyperfine)
-├── run_simple_test.sh    # Simple inline test
-└── run_tests.sh          # Test runner wrapper
+├── core.clj                      # Original 25-problem suite
+├── core_complete.clj             # NEW: Full 75-problem suite with implementations
+├── reference/                    # Reference skeleton (99 problems, no implementations)
+│   ├── core.clj
+│   ├── 1.clj
+│   └── 2.clj
+├── run_tests.sh                  # Basic TreeWalk/VM runner
+├── run_differential_tests.sh     # NEW: 3-backend differential tester with logs
+├── run_simple_test.sh            # Inline smoke tests
+└── benchmark.sh                  # Performance comparison (hyperfine)
 ```
 
-## Backends
+## Quick Start
 
-| Backend   | Status | Notes                                                    |
-|-----------|--------|----------------------------------------------------------|
-| TreeWalk  | ✅ Pass | All 25 tests pass (59 assertions)                        |
-| VM        | ✅ Pass | All 25 tests pass (59 assertions)                        |
-| WASM      | ⚠️ Stub | Phase 1-4 opcodes stubbed; heap types return 0.0         |
-
-### WASM Backend Status (Phase 1-4 Stubs)
-
-**Fully supported:**
-- ✅ Arithmetic: `(+ 1 2)` → `3`, `(* 3 4)` → `12`, etc.
-
-**Stub implementations (return dummy 0.0 for heap types):**
-- ⚠️ Vectors: `[1 2 3]` → `0` (stub)
-- ⚠️ Maps: `{:a 1}` → `0` (stub)
-- ⚠️ Function calls: `(last [1 2 3])` → `0` (stub)
-- ⚠️ Var definition: `(def x 42)` → `0` (stub)
-- ⚠️ Namespace operations: `(require ...)` → no-op
-
-**Implementation notes:**
-- Phase 1-4 opcodes have stub implementations
-- Heap types (vectors, maps, functions) return `0.0` placeholder values
-- Full heap implementation deferred to Phase 5+
-- For accurate results, use TreeWalk or VM backends
-
-## Running Tests
+### Full Differential Test (Recommended)
 
 ```bash
-# TreeWalk backend (default)
-zig-out/bin/cljw test/clj/p99/core.clj
+# Build cljw first
+zig build
 
-# VM backend
-zig-out/bin/cljw --backend vm test/clj/p99/core.clj
-
-# WASM backend (limited support)
-zig-out/bin/cljw --backend wasm test/clj/p99/simple_wasm_test.clj
+# Run comprehensive 3-backend test with color output
+./test/clj/p99/run_differential_tests.sh
 ```
 
-## Performance Benchmarking
+This runs all implemented problems on TreeWalk, VM, and Wasm backends, saves logs to `test/clj/p99/logs/`, and reports any discrepancies.
+
+### Individual Backend Tests
 
 ```bash
-# Install hyperfine first
-brew install hyperfine
+# TreeWalk (default)
+zig-out/bin/cljw test/clj/p99/core_complete.clj
 
-# Run benchmark
-bash test/clj/p99/benchmark.sh
+# VM (production)
+zig-out/bin/cljw -Dbackend=vm test/clj/p99/core_complete.clj
 
-# Results saved to test/clj/p99/benchmark_results.md
+# Wasm (requires -Dwasm=true at build time)
+zig build -Dwasm=true
+zig-out/bin/cljw -Dbackend=wasm test/clj/p99/core_complete.clj
 ```
 
-The benchmark compares TreeWalk vs VM backend performance across all 99 problems with 10 runs and 3 warmup iterations.
+### Performance Benchmark
 
-## Test Coverage
+```bash
+# Compare TreeWalk vs VM performance (requires hyperfine)
+./test/clj/p99/benchmark.sh
+```
 
-Currently implemented: **Problems 1-99** (all categories)
-- Elementary (1-18)
-- Easy (19-50)
-- Medium (51-70)
-- Hard (71-99)
+## Problem Coverage (core_complete.clj)
 
-Test assertions: **59 assertions** across **25 test cases**
+### Elementary (P01-P18) - 18 problems ✅
+- **Sequence basics**: last, penultimate, nth, count, reverse
+- **Transformations**: flatten, compress, pack, run-length encode
+- **Arithmetic**: +, -, *, /, <, >, =
+- **Higher-order**: map, filter
+
+### Easy (P19-P34) - 16 problems ✅
+- filter-even, sum, insert-at, range
+- Random selection, lotto, permutation
+- Fibonacci, palindrome, caps extraction
+- duplicate, replicate, my-range
+
+### Medium (P35-P70) - 26 problems ✅
+- maximum, interleave, interpose, drop-every
+- factorial, reverse-interleave, rotate
+- split-at, split-by-type, partition
+- frequencies, distinct, compose, juxt
+- reductions, zipmap, iterate, group-by
+- GCD, primes, merge-with, word-sort
+
+### Hard (P71-P99) - 15 problems ✅
+- set-intersection, half-truth, power-set
+- happy-numbers, symmetric-difference
+- cartesian-product, tree-predicate
+- symmetric-tree, pascal-triangle
+- equivalence-classes, product-digits
+
+**Total: 75 implemented problems** with comprehensive test coverage
+
+## Differential Testing Strategy
+
+The `run_differential_tests.sh` script:
+1. Runs `core_complete.clj` on TreeWalk backend → saves to `logs/treewalk.log`
+2. Runs `core_complete.clj` on VM backend → saves to `logs/vm.log`
+3. Runs `core_complete.clj` on Wasm backend → saves to `logs/wasm.log`
+4. Compares exit codes and test counts
+5. Reports any discrepancies with color-coded output
+
+Any difference in:
+- Exit codes
+- Test pass/fail counts  
+- Actual output values
+
+...is flagged as a **backend correctness bug**.
+
+## Integration Points
+
+- **Zig-level tests**: `test/differential_backend_tests.zig` tests at Wasm runtime level
+- **Clojure-level tests**: This P99 suite validates end-to-end language semantics
+- **Build integration**: `zig build test-diff -Dwasm=true` runs Zig differential tests
+
+## Wasm Backend Status
+
+**Current**: Phase 1-4 opcode stubs only (limited heap support)
+- Basic arithmetic and simple sequences work
+- Complex allocations (nested collections, closures) are stubbed
+- Full heap GC deferred to Phase 5-7 per ROADMAP.md
+
+**Expected**: Wasm backend will fail many P99 tests until heap implementation completes.
+
+## Notes
+
+- **VM backend**: Production default since D-196 parity completion
+- **TreeWalk backend**: Reference oracle for differential testing
+- **clojure.test integration**: Uses standard `deftest`/`is` assertions
+- **Test count validation**: Ensures backends don't silently skip tests
