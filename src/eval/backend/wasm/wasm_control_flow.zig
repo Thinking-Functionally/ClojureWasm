@@ -9,7 +9,7 @@
 //! 2. 第二遍：生成 Wasm 代碼，在跳轉目標處插入 block
 
 const std = @import("std");
-const opcode_mod = @import("vm/opcode.zig");
+const opcode_mod = @import("../vm/opcode.zig");
 
 const BytecodeChunk = opcode_mod.BytecodeChunk;
 const Instruction = opcode_mod.Instruction;
@@ -195,7 +195,7 @@ test "ControlFlowAnalysis: scan forward jump" {
 
     const chunk = BytecodeChunk{
         .instructions = try instructions.toOwnedSlice(allocator),
-        .constants = &[_]@import("../../runtime/value/value.zig").Value{},
+        .constants = &[_]@import("../../../runtime/value/value.zig").Value{},
         .call_sites = &[_]opcode_mod.CallSiteEntry{},
         .libspecs = &[_]opcode_mod.LibspecEntry{},
         .ns_filters = &[_]opcode_mod.NsFilterEntry{},

@@ -72,7 +72,9 @@
       "Bash(wasm-objdump -x test_output.wasm)",
       "Bash(npx wrangler *)",
       "Bash(curl http://localhost:8787)",
-      "Bash(pkill -f \"wrangler dev\")"
+      "Bash(pkill -f \"wrangler dev\")",
+      "Bash(git mv *)",
+      "Bash(git ls-remote *)"
     ],
     "deny": [
       "Bash(git push --force:*)",

@@ -1,0 +1,200 @@
+{
+  "env": {
+    "ZIG_LOCAL_CACHE_DIR": ".zig-cache"
+  },
+  "permissions": {
+    "allow": [
+      "Agent",
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "Skill",
+      "ScheduleWakeup",
+      "ToolSearch",
+      "Monitor",
+      "WebFetch",
+      "WebSearch",
+      "AskUserQuestion",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskList",
+      "TaskGet",
+      "TaskOutput",
+      "TaskStop",
+      "NotebookEdit",
+      "EnterPlanMode",
+      "ExitPlanMode",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListMcpResourcesTool",
+      "ReadMcpResourceTool",
+      "RemoteTrigger",
+      "Bash(git worktree *)",
+      "Bash(./zig-out/bin/cljw --backend=wasm -e '\\(def x 42\\) x')",
+      "Bash(./zig-out/bin/cljw -h)",
+      "Bash(awk '{print $1}')",
+      "Bash(DROW=\"D-577\" S='DISCHARGED 2026-10-19 — two-pass CFG reconstruction landed; forward jumps emit correct br depth' yq -i '\\(.active[] | select\\(.id == strenv\\(DROW\\)\\) | .status\\) = strenv\\(S\\)' .dev/debt.yaml)",
+      "Bash(grep -qE '^feature_deps\\\\.yaml$')",
+      "Bash(grep -qE '^\\(data/\\)?feature_deps\\\\.yaml$')",
+      "Bash(awk '/wasm_module_builder\\\\.zig.*error:/{found=1} found{print; if\\(/^[^ ]/ && NR>1\\)exit}' /private/tmp/claude-501/-Users-Shared-Relocated-Items-Security-eUSB-sync-zig-projects-ClojureWasm/bf4c5362-e770-4426-810d-5c7c8937168a/tasks/b49225t6h.output)",
+      "Bash(yq -r '.active[].id, .standing[].id, .discharged[].id' .dev/debt.yaml)",
+      "Bash(timeout 120 bash test/run_all.sh --smoke wasm_module_builder)",
+      "Bash(bash test/run_all.sh --smoke wasm_module_builder)",
+      "Bash(yq '.[] | select\\(.name == \"wasm/backend/linear_memory\"\\)' data/feature_deps.yaml)",
+      "Bash(bash scripts/check_provisional_sync.sh --help)",
+      "Bash(bash test/run_all.sh --smoke wasm)",
+      "Bash(yq '.active[] | select\\(.id | test\\(\"wasm|Wasm|WASM\"\\)\\) | .id + \": \" + .status' .dev/debt.yaml)",
+      "Bash(yq '.active[] | select\\(.id == \"D-565\"\\) | .status' .dev/debt.yaml)",
+      "Bash(yq '.active[] | select\\(.id == \"D-577\"\\)' .dev/debt.yaml)",
+      "Bash(gtimeout 120 zig build test -Dwasm -Doptimize=ReleaseSafe)",
+      "Bash(tee /tmp/test_output.log)",
+      "Bash(wasm-validate /tmp/test.wasm)",
+      "Bash(echo \"Validation failed with code $?\")",
+      "Bash(xxd /tmp/test.wasm)",
+      "Bash(tee /tmp/test_sleb128.log)",
+      "Bash(tee /tmp/test_sleb128_full.log)",
+      "Bash(pkill -f \"zig build\")",
+      "Bash(.zig-cache/o/e32f2a0bb449098d82c82bc34dd58160/cljw -e '\\(require \\(quote [java.math :as jm]\\)\\) \\(def mc \\(jm/MathContext. 10 jm/RoundingMode/HALF_UP\\)\\) \\(def bd \\(jm/BigDecimal. \"4\"\\)\\) \\(.sqrt bd mc\\)')",
+      "Bash(zig-out/bin/cljw -e '\\(require \\(quote [java.math :as jm]\\)\\) \\(def mc \\(jm/MathContext. 10 jm/RoundingMode/HALF_UP\\)\\) \\(def bd \\(jm/BigDecimal. \"4\"\\)\\) \\(.sqrt bd mc\\)')",
+      "Bash(zig-out/bin/cljw -e '\\(def bd \\(java.math.BigDecimal. \"4\"\\)\\) \\(def mc \\(java.math.MathContext. 10\\)\\) \\(.sqrt bd mc\\)')",
+      "Bash(zig-out/bin/cljw -e '\\(.sqrt 2M \\(java.math.MathContext. 10 java.math.RoundingMode/HALF_UP\\)\\)')",
+      "Bash(zig-out/bin/cljw -e '\\(.sqrt 4.00M \\(java.math.MathContext. 5\\)\\)')",
+      "Bash(zig-out/bin/cljw -e '\\(.sqrt 0M \\(java.math.MathContext. 10\\)\\)')",
+      "Bash(zig-out/bin/cljw -e '\\(try \\(.sqrt -1M \\(java.math.MathContext. 10\\)\\) \\(catch ArithmeticException e \"caught\"\\)\\)')",
+      "Bash(zig-out/bin/cljw -e '\\(try \\(.sqrt -1M \\(java.math.MathContext. 10\\)\\) \\(catch ArithmeticException e \\(.getMessage e\\)\\)\\)')",
+      "Bash(yq '.active[] | select\\(.quality_floor != null and \\(.barrier | test\\(\"none|deferred|unblocked\"; \"i\"\\)\\)\\) | {id, quality_floor, barrier}' .dev/debt.yaml)",
+      "Bash(yq '.active[0:20][] | {id, barrier: \\(.barrier | split\\(\"\\\\n\"\\)[0]\\)}' .dev/debt.yaml)",
+      "Bash(gh pr create --title 'Wasm AOT backend PoC + recent fixes \\(D-439/D-568/D-566\\)' --body ' *)",
+      "Bash(yq '.active | keys | .[]' .dev/debt.yaml)",
+      "Bash(yq '.active | keys' .dev/debt.yaml)"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git commit --no-verify:*)",
+      "Bash(rm -rf /:*)",
+      "Bash(rm -rf ~/:*)",
+      "Bash(rm -rf $HOME:*)",
+      "Bash(rm -rf .git:*)"
+    ]
+  },
+  "model": "claude-opus-4-8",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "printf '=== gate cadence (dev efficiency — read BEFORE the first commit) ===\\nDo NOT run the full gate per commit (it is slow and kills iteration). Per commit: bash test/run_all.sh --smoke <changed-e2e-step> (~tens of sec; ADR-0107 — the smoke tier authorizes shared-code commits too, up to 5 before a forced full gate) and do not block. Batch the full bash test/run_all.sh --serial-e2e at the ceiling / phase boundary / pre-release (backgroundable as a look-ahead). If a full gate fails on ONLY a non-code check (e.g. check_debt_id_refs), fix it + re-smoke — do NOT re-run the whole full gate. SSOT: .claude/rules/gate_cadence.md + memory smoke_first_batch_full_gate.\\n\\n' && test -f $CLAUDE_PROJECT_DIR/.dev/handover.md && printf '=== .dev/handover.md ===\\n' && cat $CLAUDE_PROJECT_DIR/.dev/handover.md && printf '\\n=== git log -3 ===\\n' && git -C $CLAUDE_PROJECT_DIR log -3 --decorate --oneline; test -f $CLAUDE_PROJECT_DIR/.dev/.perf_campaign_active && test -f $CLAUDE_PROJECT_DIR/.dev/perf_campaign_essence.md && printf '\\n=== perf-campaign essence (§9.2.S — relentless lookahead, machine-injected) ===\\n' && cat $CLAUDE_PROJECT_DIR/.dev/perf_campaign_essence.md || true"
+          },
+          {
+            "type": "command",
+            "command": "bash \"$CLAUDE_PROJECT_DIR/scripts/cleanup_orphans.sh\" || true"
+          }
+        ]
+      }
+    ],
+    "PostCompact": [
+      {
+        "matcher": "auto|manual",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/print_handover_brief.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/check_stale_git_lock.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/check_learning_doc.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/check_md_tables.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/check_smell_audit.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/check_gate_cadence.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/check_clj_attribution.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/check_facts_immutable.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/check_provisional_sync.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/check_dual_backend_parity.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/check_roadmap_amendment.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/check_handover_framing.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/post_commit_remind.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/gate_continue_remind.sh"
+          },
+          {
+            "type": "command",
+            "command": "bash $CLAUDE_PROJECT_DIR/scripts/perf_campaign_remind.sh"
+          }
+        ]
+      }
+    ]
+  },
+  "enabledPlugins": {
+    "figma@claude-plugins-official": false,
+    "slack@claude-plugins-official": false,
+    "notion@claude-plugins-official": false,
+    "chrome-devtools-mcp@claude-plugins-official": false,
+    "playwright@claude-plugins-official": false
+  },
+  "outputStyle": "Japanese",
+  "defaultMode": "acceptEdits",
+  "disabledMcpServers": [
+    "datadog-mcp"
+  ]
+}

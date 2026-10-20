@@ -96,7 +96,7 @@ pub fn evalForm(
         },
         .wasm => {
             const chunk = try vm_compiler.compile(rt, arena, node);
-            const WasmExecutor = @import("backend/wasm_executor.zig").WasmExecutor;
+            const WasmExecutor = @import("backend/wasm/wasm_executor.zig").WasmExecutor;
             var executor = try WasmExecutor.init(arena);
             defer executor.deinit();
             return try executor.execute(chunk);

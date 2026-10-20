@@ -5,8 +5,8 @@
 //! 提供 BytecodeChunk → Wasm → zwasm execution → Value 嘅完整流程。
 
 const std = @import("std");
-const opcode_mod = @import("vm/opcode.zig");
-const Value = @import("../../runtime/value/value.zig").Value;
+const opcode_mod = @import("../vm/opcode.zig");
+const Value = @import("../../../runtime/value/value.zig").Value;
 const wasm_module_builder = @import("wasm_module_builder.zig");
 
 const BytecodeChunk = opcode_mod.BytecodeChunk;
@@ -16,7 +16,7 @@ const build_options = @import("build_options");
 const has_wasm = build_options.wasm;
 
 // Import zwasm only when available (compile-time conditional)
-const wasm_engine = if (has_wasm) @import("../../runtime/cljw/wasm/engine.zig") else struct {
+const wasm_engine = if (has_wasm) @import("../../../runtime/cljw/wasm/engine.zig") else struct {
     pub const Loaded = void;
     pub const Value = void;
 };

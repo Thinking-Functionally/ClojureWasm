@@ -15,9 +15,9 @@
 //!   - 保持雙後端差分：TreeWalk/VM 完全唔動
 
 const std = @import("std");
-const opcode_mod = @import("vm/opcode.zig");
-const Value = @import("../../runtime/value/value.zig").Value;
-const Runtime = @import("../../runtime/runtime.zig").Runtime;
+const opcode_mod = @import("../vm/opcode.zig");
+const Value = @import("../../../runtime/value/value.zig").Value;
+const Runtime = @import("../../../runtime/runtime.zig").Runtime;
 const zwasm = @import("zwasm");
 
 const Opcode = opcode_mod.Opcode;

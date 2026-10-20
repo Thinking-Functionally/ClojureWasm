@@ -9,7 +9,7 @@ const Value = @import("../../runtime/value/value.zig").Value;
 const Runtime = @import("../../runtime/runtime.zig").Runtime;
 const Env = @import("../../runtime/env.zig").Env;
 const opcode_mod = @import("../../eval/backend/vm/opcode.zig");
-const wasm_builder = @import("../../eval/backend/wasm_module_builder.zig");
+const wasm_builder = @import("../../eval/backend/wasm/wasm_module_builder.zig");
 const error_catalog = @import("../../runtime/error/catalog.zig");
 const string_mod = @import("../../runtime/collection/string.zig");
 

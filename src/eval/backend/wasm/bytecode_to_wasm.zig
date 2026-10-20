@@ -5,8 +5,8 @@
 //! 而唔係由 AST 重新生成 IR。保留完整嘅 TreeWalk/VM 雙後端差分測試。
 
 const std = @import("std");
-const opcode_mod = @import("vm/opcode.zig");
-const Value = @import("../../runtime/value/value.zig").Value;
+const opcode_mod = @import("../vm/opcode.zig");
+const Value = @import("../../../runtime/value/value.zig").Value;
 
 const Opcode = opcode_mod.Opcode;
 const BytecodeChunk = opcode_mod.BytecodeChunk;

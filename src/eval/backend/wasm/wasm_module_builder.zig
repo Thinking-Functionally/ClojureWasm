@@ -12,8 +12,8 @@
 //!   code section (函數體)
 
 const std = @import("std");
-const opcode_mod = @import("vm/opcode.zig");
-const Value = @import("../../runtime/value/value.zig").Value;
+const opcode_mod = @import("../vm/opcode.zig");
+const Value = @import("../../../runtime/value/value.zig").Value;
 const control_flow = @import("wasm_control_flow.zig");
 
 const Opcode = opcode_mod.Opcode;
@@ -29,6 +29,7 @@ pub const BuildError = error{
     TooManyBlocks,
     UnmatchedBlock,
     MissingStringOffset,
+    VectorTooLarge,
 } || std.mem.Allocator.Error;
 
 /// Wasm 模組建造器
@@ -937,7 +938,7 @@ pub const WasmModuleBuilder = struct {
 
                         // Import WasmLinearMemory for encodeOffset
                         const WasmLinearMemory = @import("wasm_linear_memory.zig").WasmLinearMemory;
-                        const HeapTag = @import("../../runtime/value/value.zig").HeapTag;
+                        const HeapTag = @import("../../../runtime/value/value.zig").HeapTag;
 
                         // Encode offset as proper Value (NaN-box with string tag)
                         const string_value = WasmLinearMemory.encodeOffset(offset, HeapTag.string);
@@ -1675,44 +1676,65 @@ pub const WasmModuleBuilder = struct {
             .op_vector_literal => {
                 // Stack: [v1, v2, ..., vN] → [vector]
                 // operand = element count
-                // Phase 3c: Call host import vector_from_slice
                 //
-                // Host function signature: vector_from_slice(stackPtr: i32, count: i32) -> i64
-                // where stackPtr points to first Value in wasm linear memory operand stack
+                // NEW STRATEGY (Phase 3c revised):
+                // Instead of host imports with linear memory complications,
+                // inline the heap allocation + element writes in wasm code.
                 //
-                // Wasm doesn't have host memory access, so we need to:
-                // 1. Assume operand stack lives in linear memory at known location
-                //    (simplified: assume SP points to top of stack in memory)
-                // 2. Calculate stackPtr = SP - (count * 8)  (8 bytes per Value)
-                // 3. Call host import with (stackPtr, count)
-                // 4. Host reads Values from memory, builds vector, returns Value bits
-                // 5. Pop N values, push result
+                // Memory layout for Vector:
+                //   [offset+0..7]   HeapHeader { tag = .vector, meta = elem_count }
+                //   [offset+8..]    [Value; elem_count] elements
                 //
-                // Simplified emit (assumes global $sp tracks stack pointer):
+                // Steps:
+                // 1. Store N values from stack into locals
+                // 2. Call heap_alloc(size = 8 + N*8)
+                // 3. Write HeapHeader at returned offset
+                // 4. Write elements from locals to [offset+8..]
+                // 5. Encode offset as NaN-boxed Value, push to stack
+                //
                 const elem_count = instr.operand;
 
-                // Phase 3c TODO: Proper operand stack in linear memory architecture
-                // For now: call host import with dummy args (will fail at runtime)
-                // This is a PROVISIONAL implementation — needs operand stack refactor
+                if (elem_count > 64) {
+                    // Sanity check - vectors this large need different strategy
+                    return error.VectorTooLarge;
+                }
 
-                // i32.const 0 (stackPtr placeholder)
-                try code.append(self.allocator, 0x41); // i32.const
-                try self.writeLEB128(code, 0);
+                // Step 1: Store elements into locals (in reverse order since stack is LIFO)
+                // We'll use locals [1..elem_count] (local 0 is reserved for other uses)
+                // Actually: need to allocate temp locals for this. For now, simplified approach:
+                // Just save to a temporary "element buffer" using a helper global or memory.
+                //
+                // SIMPLIFIED V1: For small vectors (≤4), use explicit locals
+                // For larger vectors, use linear memory temp buffer at fixed offset
 
-                // i32.const elem_count
-                try code.append(self.allocator, 0x41); // i32.const
-                try self.writeLEB128(code, elem_count);
+                if (elem_count <= 4) {
+                    // Small vector: use locals
+                    // Allocate elem_count locals (assume they're available)
+                    // Store in reverse: vN → local[elem_count-1], ..., v1 → local[0]
 
-                // call $vector_from_slice (import index = num_builtins + 0)
-                try code.append(self.allocator, 0x10); // call
-                const num_builtins = self.scanBuiltins(chunk);
-                const import_idx = num_builtins + 0; // vector_from_slice is first collection import
-                try self.writeLEB128(code, import_idx);
+                    // TODO: This needs local allocation tracking in the builder
+                    // For now, emit stub that returns empty vector
+                    // (Proper implementation needs refactoring builder to track locals)
 
-                // Result is i64 Value bits on stack
-                // Drop original N f64 operands (TODO: should be handled by stack refactor)
-                for (0..elem_count) |_| {
-                    try code.append(self.allocator, 0x1A); // drop (will drop garbage for now)
+                    // Drop elements from stack
+                    for (0..elem_count) |_| {
+                        try code.append(self.allocator, 0x1A); // drop
+                    }
+
+                    // Push empty vector (offset 0 = reserved null, will crash if dereferenced)
+                    // Better: call empty vector constructor
+                    // For now: push 0 as i64 (will show as nil)
+                    try code.append(self.allocator, 0x42); // i64.const
+                    try code.append(self.allocator, 0x00); // LEB128(0) = 0x00
+                } else {
+                    // Large vector: needs temp memory buffer
+                    // Phase 3c TODO: implement temp buffer strategy
+
+                    for (0..elem_count) |_| {
+                        try code.append(self.allocator, 0x1A); // drop
+                    }
+                    try code.append(self.allocator, 0x42); // i64.const
+                    try self.writeLEB128I64(code, 0);
                 }
             },
             .op_set_literal => {

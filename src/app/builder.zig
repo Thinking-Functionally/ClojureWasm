@@ -41,7 +41,7 @@ const bootstrap = @import("../lang/bootstrap.zig");
 const require_resolver = @import("../lang/require_resolver.zig");
 const run_mode = @import("deps/run_mode.zig");
 const error_info = @import("../runtime/error/info.zig");
-const wasm_module_builder = @import("../eval/backend/wasm_module_builder.zig");
+const wasm_module_builder = @import("../eval/backend/wasm/wasm_module_builder.zig");
 
 /// Accumulates the require-closure's compiled chunks during the build-time
 /// load (ADR-0034 amendment 3 A3-D2). Installed on `rt.build_chunk_sink` so

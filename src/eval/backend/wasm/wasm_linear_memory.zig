@@ -14,9 +14,9 @@
 //! type-specific data (String: length + bytes; Vector: count + elements; etc.).
 
 const std = @import("std");
-const Value = @import("../../runtime/value/value.zig").Value;
-const HeapTag = @import("../../runtime/value/value.zig").HeapTag;
-const HeapHeader = @import("../../runtime/value/value.zig").HeapHeader;
+const Value = @import("../../../runtime/value/value.zig").Value;
+const HeapTag = @import("../../../runtime/value/value.zig").HeapTag;
+const HeapHeader = @import("../../../runtime/value/value.zig").HeapHeader;
 
 /// Linear memory allocator state
 pub const WasmLinearMemory = struct {
