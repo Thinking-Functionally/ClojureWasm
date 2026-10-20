@@ -28,6 +28,12 @@ const macro_dispatch = @import("../eval/macro_dispatch.zig");
 const vm_compiler = @import("../eval/backend/vm/compiler.zig");
 const serialize = @import("../eval/bytecode/serialize.zig");
 const BytecodeChunk = @import("../eval/backend/vm/opcode.zig").BytecodeChunk;
+const WireInstr = @import("../eval/backend/vm/opcode.zig").WireInstr;
+const CallSiteEntry = @import("../eval/backend/vm/opcode.zig").CallSiteEntry;
+const LibspecEntry = @import("../eval/backend/vm/opcode.zig").LibspecEntry;
+const NsFilterEntry = @import("../eval/backend/vm/opcode.zig").NsFilterEntry;
+const CtorEntry = @import("../eval/backend/vm/opcode.zig").CtorEntry;
+const ImportPair = @import("../eval/backend/vm/opcode.zig").ImportPair;
 const driver = @import("../eval/driver.zig");
 const Value = @import("../runtime/value/value.zig").Value;
 const vm = @import("../eval/backend/vm.zig");
@@ -35,6 +41,7 @@ const bootstrap = @import("../lang/bootstrap.zig");
 const require_resolver = @import("../lang/require_resolver.zig");
 const run_mode = @import("deps/run_mode.zig");
 const error_info = @import("../runtime/error/info.zig");
+const wasm_module_builder = @import("../eval/backend/wasm_module_builder.zig");
 
 /// Accumulates the require-closure's compiled chunks during the build-time
 /// load (ADR-0034 amendment 3 A3-D2). Installed on `rt.build_chunk_sink` so
@@ -189,6 +196,155 @@ pub fn buildEnvelope(
     var pb: serialize.PoolBuilder = .{};
     defer pb.deinit(allocator);
     return serialize.serializeEnvelope(allocator, all.items, null, components.items, &pb, true);
+}
+
+/// Build chunks only (for wasm emission)
+fn buildChunks(
+    allocator: std.mem.Allocator,
+    rt: *Runtime,
+    env: *Env,
+    macro_table: *macro_dispatch.Table,
+    arena: std.mem.Allocator,
+    source_text: []const u8,
+    source_label: []const u8,
+) ![]BytecodeChunk {
+    var closure = ClosureAccum{ .allocator = allocator, .chunks = .empty };
+    defer closure.chunks.deinit(allocator);
+    rt.build_chunk_sink = .{ .ctx = &closure, .push = ClosureAccum.push };
+    defer rt.build_chunk_sink = null;
+
+    var comp_paths: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (comp_paths.items) |p| rt.gpa.free(p);
+        comp_paths.deinit(rt.gpa);
+    }
+    rt.component_sink = &comp_paths;
+    defer rt.component_sink = null;
+
+    var entry_chunks: std.ArrayList(BytecodeChunk) = .empty;
+    defer entry_chunks.deinit(allocator);
+
+    var locals: [driver.MAX_LOCALS]Value = [_]Value{.nil_val} ** driver.MAX_LOCALS;
+    try rt.registerSource(source_label, source_text);
+    var reader = Reader.init(arena, source_text);
+    reader.file_name = source_label;
+    while (true) {
+        const form = (try reader.read()) orelse break;
+        for (try driver.topLevelLeaves(arena, form)) |leaf| {
+            var af: root_set.AnalysisFrame = undefined;
+            root_set.beginAnalysis(&af, rt.gc.infra);
+            defer root_set.endAnalysisPersist(&af, &rt.gc);
+            const node = try analyzeForm(arena, rt, env, null, leaf, macro_table);
+            const chunk = try vm_compiler.compile(rt, arena, node);
+            try entry_chunks.append(allocator, chunk);
+            _ = try driver.evalForm(rt, env, &locals, arena, node);
+        }
+    }
+
+    var all: std.ArrayList(BytecodeChunk) = .empty;
+    errdefer all.deinit(allocator);
+    try all.appendSlice(allocator, closure.chunks.items);
+    try all.appendSlice(allocator, entry_chunks.items);
+    return all.toOwnedSlice(allocator);
+}
+
+/// Build main-mode chunks (for wasm emission)
+fn buildMainChunks(
+    allocator: std.mem.Allocator,
+    rt: *Runtime,
+    env: *Env,
+    macro_table: *macro_dispatch.Table,
+    arena: std.mem.Allocator,
+    ns: []const u8,
+    args: []const []const u8,
+) ![]BytecodeChunk {
+    _ = args; // TODO: embed args metadata in wasm
+    var closure = ClosureAccum{ .allocator = allocator, .chunks = .empty };
+    defer closure.chunks.deinit(allocator);
+    rt.build_chunk_sink = .{ .ctx = &closure, .push = ClosureAccum.push };
+    defer rt.build_chunk_sink = null;
+
+    var comp_paths: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (comp_paths.items) |p| rt.gpa.free(p);
+        comp_paths.deinit(rt.gpa);
+    }
+    rt.component_sink = &comp_paths;
+    defer rt.component_sink = null;
+
+    const req_src = try std.fmt.allocPrint(arena, "(clojure.core/require (quote [{s}]))", .{ns});
+    var locals: [driver.MAX_LOCALS]Value = [_]Value{.nil_val} ** driver.MAX_LOCALS;
+    var reader = Reader.init(arena, req_src);
+    const form = (try reader.read()) orelse return error.EmptyRequireForm;
+    var af: root_set.AnalysisFrame = undefined;
+    root_set.beginAnalysis(&af, rt.gc.infra);
+    defer root_set.endAnalysisPersist(&af, &rt.gc);
+    const node = try analyzeForm(arena, rt, env, null, form, macro_table);
+    _ = try driver.evalForm(rt, env, &locals, arena, node);
+
+    return try allocator.dupe(BytecodeChunk, closure.chunks.items);
+}
+
+/// Build a single Wasm module from multiple chunks
+fn buildWasmModule(allocator: std.mem.Allocator, chunks: []const BytecodeChunk) ![]const u8 {
+    if (chunks.len == 0) return error.NoChunksToCompile;
+
+    // Merge all chunks into one unified chunk:
+    // 1. Concatenate instructions
+    // 2. Merge constants (with offset adjustment for instructions)
+    // 3. Merge metadata arrays
+
+    var all_instrs: std.ArrayList(WireInstr) = .empty;
+    defer all_instrs.deinit(allocator);
+    var all_consts: std.ArrayList(Value) = .empty;
+    defer all_consts.deinit(allocator);
+    var all_call_sites: std.ArrayList(CallSiteEntry) = .empty;
+    defer all_call_sites.deinit(allocator);
+    var all_libspecs: std.ArrayList(LibspecEntry) = .empty;
+    defer all_libspecs.deinit(allocator);
+    var all_ns_filters: std.ArrayList(NsFilterEntry) = .empty;
+    defer all_ns_filters.deinit(allocator);
+    var all_ctor_sites: std.ArrayList(CtorEntry) = .empty;
+    defer all_ctor_sites.deinit(allocator);
+    var all_imports: std.ArrayList(ImportPair) = .empty;
+    defer all_imports.deinit(allocator);
+
+    for (chunks) |chunk| {
+        const const_offset: u16 = @intCast(all_consts.items.len);
+
+        // Append instructions with adjusted constant indices
+        for (chunk.instructions) |instr| {
+            var adjusted = instr;
+            // Adjust op_const operand to point to merged constants array
+            if (instr.opcode == .op_const) {
+                adjusted.operand += const_offset;
+            }
+            try all_instrs.append(allocator, adjusted);
+        }
+
+        // Append constants
+        try all_consts.appendSlice(allocator, chunk.constants);
+
+        // Append metadata (no offset adjustment needed for now - PROVISIONAL)
+        try all_call_sites.appendSlice(allocator, chunk.call_sites);
+        try all_libspecs.appendSlice(allocator, chunk.libspecs);
+        try all_ns_filters.appendSlice(allocator, chunk.ns_filters);
+        try all_ctor_sites.appendSlice(allocator, chunk.ctor_sites);
+        try all_imports.appendSlice(allocator, chunk.import_sites);
+    }
+
+    const merged_chunk = BytecodeChunk{
+        .instructions = all_instrs.items,
+        .constants = all_consts.items,
+        .call_sites = all_call_sites.items,
+        .libspecs = all_libspecs.items,
+        .ns_filters = all_ns_filters.items,
+        .ctor_sites = all_ctor_sites.items,
+        .import_sites = all_imports.items,
+        .source_file = if (chunks.len > 0) chunks[0].source_file else "merged",
+    };
+
+    return wasm_module_builder.buildWasmModule(allocator, merged_chunk);
 }
 
 /// AOT-compile the WHOLE eager bootstrap (`bootstrap.ACTIVE_FILES` — clojure.core
@@ -381,7 +537,7 @@ const BuildSpec = union(enum) {
 /// writer. A fresh per-call writer restarts at file offset 0, so on a seekable
 /// stdout (`cljw build app.clj > build.log`) every form overwrote the previous
 /// one and only the last survived.
-fn buildArtifact(io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, stdout: *std.Io.Writer, out_path: []const u8, load_paths: []const []const u8, spec: BuildSpec) !void {
+fn buildArtifact(io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, stdout: *std.Io.Writer, out_path: []const u8, load_paths: []const []const u8, emit_wasm: bool, spec: BuildSpec) !void {
     var rt = Runtime.init(io, gpa);
     defer rt.deinit();
     rt.stdout = stdout;
@@ -398,24 +554,47 @@ fn buildArtifact(io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, s
     rt.load_paths = load_paths;
     require_resolver.installChained(&rt);
 
-    const payload = switch (spec) {
-        .script => |s| try buildEnvelope(gpa, &rt, &env, &macro_table, arena, s.src, s.label),
-        .main => |m| try buildMainEnvelope(gpa, &rt, &env, &macro_table, arena, m.ns, m.args),
-    };
-    defer gpa.free(payload);
+    if (emit_wasm) {
+        // --emit-wasm mode: generate standalone .wasm module
+        const chunks = switch (spec) {
+            .script => |s| try buildChunks(gpa, &rt, &env, &macro_table, arena, s.src, s.label),
+            .main => |m| try buildMainChunks(gpa, &rt, &env, &macro_table, arena, m.ns, m.args),
+        };
+        defer {
+            for (chunks) |_| {} // chunks slices are arena-owned, no need to free
+            gpa.free(chunks);
+        }
 
-    const self_bytes = try readSelfExe(io, gpa);
-    defer gpa.free(self_bytes);
+        const wasm_bytes = try buildWasmModule(gpa, chunks);
+        defer gpa.free(wasm_bytes);
 
-    const artifact = try serialize.frameArtifact(gpa, self_bytes, payload);
-    defer gpa.free(artifact);
+        const out = try std.Io.Dir.cwd().createFile(io, out_path, .{ .truncate = true });
+        defer out.close(io);
+        var wbuf: [4096]u8 = undefined;
+        var ow = out.writer(io, &wbuf);
+        try ow.interface.writeAll(wasm_bytes);
+        try ow.interface.flush();
+    } else {
+        // Normal mode: generate executable with CLJC trailer
+        const payload = switch (spec) {
+            .script => |s| try buildEnvelope(gpa, &rt, &env, &macro_table, arena, s.src, s.label),
+            .main => |m| try buildMainEnvelope(gpa, &rt, &env, &macro_table, arena, m.ns, m.args),
+        };
+        defer gpa.free(payload);
 
-    const out = try std.Io.Dir.cwd().createFile(io, out_path, .{ .truncate = true, .permissions = .executable_file });
-    defer out.close(io);
-    var wbuf: [4096]u8 = undefined;
-    var ow = out.writer(io, &wbuf);
-    try ow.interface.writeAll(artifact);
-    try ow.interface.flush();
+        const self_bytes = try readSelfExe(io, gpa);
+        defer gpa.free(self_bytes);
+
+        const artifact = try serialize.frameArtifact(gpa, self_bytes, payload);
+        defer gpa.free(artifact);
+
+        const out = try std.Io.Dir.cwd().createFile(io, out_path, .{ .truncate = true, .permissions = .executable_file });
+        defer out.close(io);
+        var wbuf: [4096]u8 = undefined;
+        var ow = out.writer(io, &wbuf);
+        try ow.interface.writeAll(artifact);
+        try ow.interface.flush();
+    }
     // Build-time eval's own output, flushed BEFORE the exit barrier below —
     // that barrier may hard-exit, which would drop a buffered tail.
     try stdout.flush();
@@ -428,18 +607,18 @@ fn buildArtifact(io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, s
 /// payload envelope and append it to a copy of the running cljw binary as a
 /// self-contained artifact with a `"CLJC"` trailer (ADR-0034 amendment 1/2).
 /// Build-time eval runs top-level side effects (A1-D2). The output is executable.
-pub fn buildFile(io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, stdout: *std.Io.Writer, in_path: []const u8, out_path: []const u8, load_paths: []const []const u8) !void {
+pub fn buildFile(io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, stdout: *std.Io.Writer, in_path: []const u8, out_path: []const u8, emit_wasm: bool, load_paths: []const []const u8) !void {
     const source = try readFileAll(io, gpa, in_path);
     defer gpa.free(source);
-    return buildArtifact(io, gpa, arena, stdout, out_path, load_paths, .{ .script = .{ .src = source, .label = in_path } });
+    return buildArtifact(io, gpa, arena, stdout, out_path, load_paths, emit_wasm, .{ .script = .{ .src = source, .label = in_path } });
 }
 
 /// `cljw build -m <ns> [args…] -o <out>` (main mode, ADR-0034 am4): embed the
 /// require closure for `<ns>` + an entry manifest; the produced binary invokes
 /// `(<ns>/-main args)` at run, NOT at build (so a server `-main` does not hang
 /// the build).
-pub fn buildMainFile(io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, stdout: *std.Io.Writer, ns: []const u8, args: []const []const u8, out_path: []const u8, load_paths: []const []const u8) !void {
-    return buildArtifact(io, gpa, arena, stdout, out_path, load_paths, .{ .main = .{ .ns = ns, .args = args } });
+pub fn buildMainFile(io: std.Io, gpa: std.mem.Allocator, arena: std.mem.Allocator, stdout: *std.Io.Writer, ns: []const u8, args: []const []const u8, out_path: []const u8, emit_wasm: bool, load_paths: []const []const u8) !void {
+    return buildArtifact(io, gpa, arena, stdout, out_path, load_paths, emit_wasm, .{ .main = .{ .ns = ns, .args = args } });
 }
 
 /// Startup hook: if the running binary carries an embedded payload trailer,

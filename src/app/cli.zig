@@ -192,6 +192,7 @@ pub fn dispatch(init: std.process.Init) !void {
             var main_ns: ?[]const u8 = null;
             var build_aliases: std.ArrayList([]const u8) = .empty;
             var main_args: std.ArrayList([]const u8) = .empty;
+            var emit_wasm: bool = false;
             while (args.next()) |a| {
                 if (std.mem.eql(u8, a, "-o")) {
                     out_path = args.next() orelse {
@@ -199,6 +200,8 @@ pub fn dispatch(init: std.process.Init) !void {
                         try stderr.flush();
                         std.process.exit(1);
                     };
+                } else if (std.mem.eql(u8, a, "--emit-wasm")) {
+                    emit_wasm = true;
                 } else if (std.mem.eql(u8, a, "-m") or std.mem.eql(u8, a, "--main")) {
                     main_ns = args.next() orelse {
                         try stderr.writeAll("build: -m requires a namespace\n");
@@ -252,13 +255,13 @@ pub fn dispatch(init: std.process.Init) !void {
                 std.process.exit(1);
             }
             if (main_ns) |mns| {
-                builder.buildMainFile(io, gpa, arena, stdout, mns, main_args.items, out, deps.load_paths) catch |err| {
+                builder.buildMainFile(io, gpa, arena, stdout, mns, main_args.items, out, emit_wasm, deps.load_paths) catch |err| {
                     try stderr.print("build failed: {s}\n", .{@errorName(err)});
                     try stderr.flush();
                     std.process.exit(1);
                 };
             } else {
-                builder.buildFile(io, gpa, arena, stdout, in_path.?, out, deps.load_paths) catch |err| {
+                builder.buildFile(io, gpa, arena, stdout, in_path.?, out, emit_wasm, deps.load_paths) catch |err| {
                     try stderr.print("build failed: {s}\n", .{@errorName(err)});
                     try stderr.flush();
                     std.process.exit(1);
