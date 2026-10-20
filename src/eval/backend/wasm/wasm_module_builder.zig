@@ -194,9 +194,9 @@ pub const WasmModuleBuilder = struct {
         if (needs_collections) {
             const collection_imports = [_][]const u8{ "vector_from_slice", "map_from_pairs", "set_from_slice" };
             for (collection_imports) |name| {
-                // module name: "host"
+                // module name: "cljw" (ClojureWasm runtime)
                 try self.writeLEB128(&payload, 4);
-                try payload.appendSlice(self.allocator, "host");
+                try payload.appendSlice(self.allocator, "cljw");
 
                 // field name
                 try self.writeLEB128(&payload, @intCast(name.len));
@@ -215,7 +215,7 @@ pub const WasmModuleBuilder = struct {
         if (accessors.op_get) {
             // cljw_get_2: type 5 ([f64 f64] -> [f64])
             try self.writeLEB128(&payload, 4);
-            try payload.appendSlice(self.allocator, "host");
+            try payload.appendSlice(self.allocator, "cljw");
             const name = "cljw_get_2";
             try self.writeLEB128(&payload, @intCast(name.len));
             try payload.appendSlice(self.allocator, name);
@@ -224,7 +224,7 @@ pub const WasmModuleBuilder = struct {
 
             // cljw_get_3: type 6 ([f64 f64 f64] -> [f64])
             try self.writeLEB128(&payload, 4);
-            try payload.appendSlice(self.allocator, "host");
+            try payload.appendSlice(self.allocator, "cljw");
             const name3 = "cljw_get_3";
             try self.writeLEB128(&payload, @intCast(name3.len));
             try payload.appendSlice(self.allocator, name3);
@@ -234,7 +234,7 @@ pub const WasmModuleBuilder = struct {
         if (accessors.op_nth) {
             // cljw_nth_3: type 6 ([f64 f64 f64] -> [f64])
             try self.writeLEB128(&payload, 4);
-            try payload.appendSlice(self.allocator, "host");
+            try payload.appendSlice(self.allocator, "cljw");
             const name = "cljw_nth_3";
             try self.writeLEB128(&payload, @intCast(name.len));
             try payload.appendSlice(self.allocator, name);
@@ -244,7 +244,7 @@ pub const WasmModuleBuilder = struct {
         if (accessors.op_nth2) {
             // cljw_nth_2: type 5 ([f64 f64] -> [f64])
             try self.writeLEB128(&payload, 4);
-            try payload.appendSlice(self.allocator, "host");
+            try payload.appendSlice(self.allocator, "cljw");
             const name = "cljw_nth_2";
             try self.writeLEB128(&payload, @intCast(name.len));
             try payload.appendSlice(self.allocator, name);
@@ -1734,7 +1734,7 @@ pub const WasmModuleBuilder = struct {
                         try code.append(self.allocator, 0x1A); // drop
                     }
                     try code.append(self.allocator, 0x42); // i64.const
-                    try self.writeLEB128I64(code, 0);
+                    try code.append(self.allocator, 0x00); // LEB128 of 0 is just 0x00
                 }
             },
             .op_set_literal => {

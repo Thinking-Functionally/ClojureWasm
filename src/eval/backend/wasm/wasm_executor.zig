@@ -7,7 +7,9 @@
 const std = @import("std");
 const opcode_mod = @import("../vm/opcode.zig");
 const Value = @import("../../../runtime/value/value.zig").Value;
+const Runtime = @import("../../../runtime/runtime.zig").Runtime;
 const wasm_module_builder = @import("wasm_module_builder.zig");
+const wasm_host_imports = @import("wasm_host_imports.zig");
 
 const BytecodeChunk = opcode_mod.BytecodeChunk;
 
@@ -32,10 +34,12 @@ pub const ExecuteError = error{
 /// Wasm 執行器
 pub const WasmExecutor = struct {
     allocator: std.mem.Allocator,
+    rt: *Runtime,
 
-    pub fn init(allocator: std.mem.Allocator) !WasmExecutor {
+    pub fn init(allocator: std.mem.Allocator, rt: *Runtime) !WasmExecutor {
         return .{
             .allocator = allocator,
+            .rt = rt,
         };
     }
 
@@ -58,22 +62,39 @@ pub const WasmExecutor = struct {
         };
         defer self.allocator.free(wasm_bytes);
 
-        // Step 2: 載入到 zwasm Engine
-        var loaded = wasm_engine.load(self.allocator, wasm_bytes, .{}) catch {
+        // Step 2: 設置 zwasm Engine + Linker with host imports
+        const zwasm = @import("zwasm");
+        var engine = zwasm.Engine.init(self.allocator, .{}) catch {
             return ExecuteError.WasmLoadFailed;
         };
-        defer {
-            loaded.deinit();
-            self.allocator.destroy(loaded);
-        }
+        defer engine.deinit();
 
-        // Step 3: 執行 "main" 函數
-        var results: [1]wasm_engine.Value = undefined;
-        loaded.invoke("main", &[_]wasm_engine.Value{}, &results) catch {
+        var linker = zwasm.Linker.init(&engine);
+        defer linker.deinit();
+
+        // Register D-579/D-580 host imports
+        wasm_host_imports.registerHostImports(&linker, self.rt) catch {
+            return ExecuteError.WasmLoadFailed;
+        };
+
+        // Step 3: Compile and instantiate module with Linker
+        var module = engine.compile(wasm_bytes) catch {
+            return ExecuteError.WasmLoadFailed;
+        };
+        defer module.deinit();
+
+        var instance = linker.instantiate(&module, .{}) catch {
+            return ExecuteError.WasmLoadFailed;
+        };
+        defer instance.deinit();
+
+        // Step 4: 執行 "main" 函數
+        var results: [1]zwasm.Value = undefined;
+        instance.invoke("main", &[_]zwasm.Value{}, &results) catch {
             return ExecuteError.WasmExecutionFailed;
         };
 
-        // Step 4: zwasm 結果轉換為 cljw Value
+        // Step 5: zwasm 結果轉換為 cljw Value
         // zwasm Value.f64 is u64 (bit pattern), need @bitCast to f64
         const result_u64 = results[0].f64;
         const result_f64: f64 = @bitCast(result_u64);
@@ -89,7 +110,10 @@ test "WasmExecutor: init and deinit" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var executor = try WasmExecutor.init(allocator);
+    var rt = try Runtime.init(allocator);
+    defer rt.deinit();
+
+    var executor = try WasmExecutor.init(allocator, &rt);
     defer executor.deinit();
 
     // Executor 初始化成功
@@ -103,7 +127,10 @@ test "WasmExecutor: integer constant" {
     const testing = std.testing;
     const allocator = testing.allocator;
 
-    var executor = try WasmExecutor.init(allocator);
+    var rt = try Runtime.init(allocator);
+    defer rt.deinit();
+
+    var executor = try WasmExecutor.init(allocator, &rt);
     defer executor.deinit();
 
     // 構造簡單嘅 BytecodeChunk: [(const 42), (ret)]

@@ -33,10 +33,9 @@
 //! Host function signature pattern:
 //! ```zig
 //! fn hostFunc(caller: *zwasm.Caller, param1: i32, param2: i64) i64 {
-//!     const mem = caller.memory() orelse return nan_box_nil();
-//!     const data = mem.read(i64, @intCast(param1)) catch return nan_box_nil();
-//!     // ... process data ...
-//!     return result;
+//!     const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
+//!     const mem = caller.memory() orelse return error_value;
+//!     // ... use mem.read() to access linear memory
 //! }
 //! ```
 //!
@@ -60,6 +59,11 @@
 const std = @import("std");
 const Value = @import("../../../runtime/value/value.zig").Value;
 const zwasm = @import("zwasm");
+const Runtime = @import("../../../runtime/runtime.zig").Runtime;
+const vector = @import("../../../runtime/collection/vector.zig");
+const map_api = @import("../../../runtime/collection/map.zig");
+const set_mod = @import("../../../runtime/collection/set.zig");
+const lookup = @import("../../../runtime/collection/lookup.zig");
 
 // ============================================================================
 // D-579: Collection Literal Host Functions
@@ -72,18 +76,17 @@ const zwasm = @import("zwasm");
 /// @return NaN-boxed Vector Value (i64)
 ///
 /// Wasm signature: (i32, i32) -> i64
-/// Host function reads `len` NaN-boxed Values from linear memory at `ptr`,
-/// constructs a Clojure vector, and returns the NaN-boxed result.
 pub fn vector_from_slice(caller: *zwasm.Caller, ptr: i32, len: i32) i64 {
-    // Get linear memory access
+    const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
     const mem = caller.memory() orelse return @bitCast(Value.nil_val);
     const alloc = caller.allocator();
 
-    // Validate inputs
     if (len < 0) return @bitCast(Value.nil_val);
     const elem_count: u32 = @intCast(len);
 
-    // Read elements from linear memory (each element is 8 bytes, i64 NaN-boxed Value)
+    if (elem_count == 0) return @bitCast(vector.empty());
+
+    // Read elements from linear memory (8 bytes each)
     var elements = alloc.alloc(Value, elem_count) catch return @bitCast(Value.nil_val);
     defer alloc.free(elements);
 
@@ -94,52 +97,68 @@ pub fn vector_from_slice(caller: *zwasm.Caller, ptr: i32, len: i32) i64 {
         elements[i] = @bitCast(raw_val);
     }
 
-    // TODO: Construct actual Clojure vector using Runtime APIs
-    // For now, return nil (proper implementation requires Runtime context)
-    // Note: elements[0..elem_count] contain the Values read from memory
-    return @bitCast(Value.nil_val);
+    // Construct Clojure vector
+    const result = vector.fromSlice(rt, elements) catch return @bitCast(Value.nil_val);
+    return @bitCast(result);
 }
 
 /// map_from_pairs: 從 linear memory 構造 Map
 /// @param caller - zwasm Caller context
 /// @param ptr - linear memory offset to key-value pairs
-/// @param len - number of key-value pairs (NOT total elements)
+/// @param len - number of key-value pairs
 /// @return NaN-boxed Map Value (i64)
 ///
-/// Memory layout: [k0, v0, k1, v1, ..., kN-1, vN-1]
-/// Each key and value is 8 bytes (i64 NaN-boxed Value)
+/// Memory layout: [k0, v0, k1, v1, ...]
+/// Wasm signature: (i32, i32) -> i64
 pub fn map_from_pairs(caller: *zwasm.Caller, ptr: i32, len: i32) i64 {
+    const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
     const mem = caller.memory() orelse return @bitCast(Value.nil_val);
     const alloc = caller.allocator();
 
     if (len < 0) return @bitCast(Value.nil_val);
     const pair_count: u32 = @intCast(len);
 
-    // Each pair is 16 bytes (2 × i64)
-    var pairs = alloc.alloc([2]Value, pair_count) catch return @bitCast(Value.nil_val);
+    if (pair_count == 0) return @bitCast(map_api.empty());
+
+    // Read pairs (each pair is 16 bytes: key + value)
+    var pairs = alloc.alloc(Value, pair_count * 2) catch return @bitCast(Value.nil_val);
     defer alloc.free(pairs);
 
     const base_addr: u32 = @intCast(ptr);
     for (0..pair_count) |i| {
-        const pair_offset = @as(u32, @intCast(i)) * 16;
-        const key_raw = mem.read(i64, base_addr + pair_offset) catch return @bitCast(Value.nil_val);
-        const val_raw = mem.read(i64, base_addr + pair_offset + 8) catch return @bitCast(Value.nil_val);
-        pairs[i] = .{ @bitCast(key_raw), @bitCast(val_raw) };
+        const key_addr = base_addr + @as(u32, @intCast(i)) * 16;
+        const val_addr = key_addr + 8;
+
+        const raw_key = mem.read(i64, key_addr) catch return @bitCast(Value.nil_val);
+        const raw_val = mem.read(i64, val_addr) catch return @bitCast(Value.nil_val);
+
+        pairs[i * 2] = @bitCast(raw_key);
+        pairs[i * 2 + 1] = @bitCast(raw_val);
     }
 
-    // TODO: Construct actual Clojure map
-    // Note: pairs[0..pair_count] contain [key, value] pairs from memory
-    return @bitCast(Value.nil_val);
+    // Construct Clojure map
+    const result = map_api.fromLiteralPairs(rt, pairs) catch return @bitCast(Value.nil_val);
+    return @bitCast(result);
 }
 
 /// set_from_slice: 從 linear memory 構造 Set
+/// @param caller - zwasm Caller context
+/// @param ptr - linear memory offset
+/// @param len - element count
+/// @return NaN-boxed Set Value (i64)
+///
+/// Wasm signature: (i32, i32) -> i64
 pub fn set_from_slice(caller: *zwasm.Caller, ptr: i32, len: i32) i64 {
+    const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
     const mem = caller.memory() orelse return @bitCast(Value.nil_val);
     const alloc = caller.allocator();
 
     if (len < 0) return @bitCast(Value.nil_val);
     const elem_count: u32 = @intCast(len);
 
+    if (elem_count == 0) return @bitCast(set_mod.empty());
+
+    // Read elements
     var elements = alloc.alloc(Value, elem_count) catch return @bitCast(Value.nil_val);
     defer alloc.free(elements);
 
@@ -150,101 +169,87 @@ pub fn set_from_slice(caller: *zwasm.Caller, ptr: i32, len: i32) i64 {
         elements[i] = @bitCast(raw_val);
     }
 
-    // TODO: Construct actual Clojure set
-    // Note: elements[0..elem_count] contain the Values read from memory
-    return @bitCast(Value.nil_val);
+    // Construct set by conjing elements onto empty set
+    var result = set_mod.empty();
+    for (elements) |elem| {
+        result = set_mod.conj(rt, result, elem) catch return @bitCast(Value.nil_val);
+    }
+    return @bitCast(result);
 }
 
 // ============================================================================
 // D-580: Collection Accessor Host Functions
 // ============================================================================
 
-/// cljw_get_2: (get map key)
-/// @param caller - zwasm Caller context
-/// @param map_val - NaN-boxed Map Value (i64)
-/// @param key_val - NaN-boxed key Value (i64)
-/// @return NaN-boxed result Value (i64), nil if not found
-///
+/// cljw_get_2: (get coll key)
 /// Wasm signature: (i64, i64) -> i64
-pub fn cljw_get_2(caller: *zwasm.Caller, map_val: i64, key_val: i64) i64 {
-    _ = caller;
+pub fn cljw_get_2(caller: *zwasm.Caller, coll_val: i64, key_val: i64) i64 {
+    const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
 
-    const map: Value = @bitCast(map_val);
+    const coll: Value = @bitCast(coll_val);
     const key: Value = @bitCast(key_val);
 
-    // TODO: Implement proper map lookup using Runtime APIs
-    // For now, return nil
-    // Note: Need to call map.get(key) through Runtime
-    _ = map;
-    _ = key;
-    return @bitCast(Value.nil_val);
+    const result = lookup.get(rt, coll, key) catch return @bitCast(Value.nil_val);
+    return @bitCast(result);
 }
 
-/// cljw_get_3: (get map key not-found)
-pub fn cljw_get_3(caller: *zwasm.Caller, map_val: i64, key_val: i64, not_found: i64) i64 {
-    _ = caller;
+/// cljw_get_3: (get coll key not-found)
+/// Wasm signature: (i64, i64, i64) -> i64
+pub fn cljw_get_3(caller: *zwasm.Caller, coll_val: i64, key_val: i64, not_found: i64) i64 {
+    const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
 
-    const map: Value = @bitCast(map_val);
+    const coll: Value = @bitCast(coll_val);
     const key: Value = @bitCast(key_val);
+    const default: Value = @bitCast(not_found);
 
-    // TODO: Implement proper map lookup
-    // If key not found, return not_found value
-    _ = map;
-    _ = key;
-    return not_found;
+    const result = lookup.getOr(rt, coll, key, default) catch return not_found;
+    return @bitCast(result);
 }
 
 /// cljw_nth_2: (nth coll index)
+/// Wasm signature: (i64, i64) -> i64
 pub fn cljw_nth_2(caller: *zwasm.Caller, coll_val: i64, index_val: i64) i64 {
-    _ = caller;
+    const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
 
     const coll: Value = @bitCast(coll_val);
     const index: Value = @bitCast(index_val);
 
-    // TODO: Implement proper indexed access
-    _ = coll;
-    _ = index;
-    return @bitCast(Value.nil_val);
+    const result = lookup.nth(rt, coll, index) catch return @bitCast(Value.nil_val);
+    return @bitCast(result);
 }
 
 /// cljw_nth_3: (nth coll index not-found)
+/// Wasm signature: (i64, i64, i64) -> i64
 pub fn cljw_nth_3(caller: *zwasm.Caller, coll_val: i64, index_val: i64, not_found: i64) i64 {
-    _ = caller;
+    const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
 
     const coll: Value = @bitCast(coll_val);
     const index: Value = @bitCast(index_val);
+    const default: Value = @bitCast(not_found);
 
-    // TODO: Implement proper indexed access with fallback
-    _ = coll;
-    _ = index;
-    return not_found;
+    const result = lookup.nthOr(rt, coll, index, default) catch return not_found;
+    return @bitCast(result);
 }
 
 // ============================================================================
 // Host Import Registration
 // ============================================================================
 
-/// Register all D-579/D-580 host imports into a zwasm Linker
+/// Register all D-579/D-580 host imports with Runtime context
 ///
-/// Call this from wasm_executor.zig before instantiating the module.
-/// The Linker will provide these functions to the guest Wasm module.
-///
-/// Example usage:
-/// ```zig
-/// var linker = zwasm.Linker.init(engine);
-/// try registerHostImports(&linker);
-/// var instance = try linker.instantiate(module, store);
-/// ```
-pub fn registerHostImports(linker: *zwasm.Linker) !void {
+/// Call from wasm_executor.zig before instantiating module.
+/// Runtime pointer is passed as host_data via defineFuncCtx.
+pub fn registerHostImports(linker: *zwasm.Linker, rt: *Runtime) !void {
+    const rt_ptr: *anyopaque = @ptrCast(rt);
+
     // D-579: Collection literals
-    // Module name: "cljw" (ClojureWasm runtime)
-    try linker.defineFunc("cljw", "vector_from_slice", @TypeOf(vector_from_slice), &vector_from_slice);
-    try linker.defineFunc("cljw", "map_from_pairs", @TypeOf(map_from_pairs), &map_from_pairs);
-    try linker.defineFunc("cljw", "set_from_slice", @TypeOf(set_from_slice), &set_from_slice);
+    try linker.defineFuncCtx("cljw", "vector_from_slice", rt_ptr, @TypeOf(vector_from_slice), &vector_from_slice);
+    try linker.defineFuncCtx("cljw", "map_from_pairs", rt_ptr, @TypeOf(map_from_pairs), &map_from_pairs);
+    try linker.defineFuncCtx("cljw", "set_from_slice", rt_ptr, @TypeOf(set_from_slice), &set_from_slice);
 
     // D-580: Collection accessors
-    try linker.defineFunc("cljw", "cljw_get_2", @TypeOf(cljw_get_2), &cljw_get_2);
-    try linker.defineFunc("cljw", "cljw_get_3", @TypeOf(cljw_get_3), &cljw_get_3);
-    try linker.defineFunc("cljw", "cljw_nth_2", @TypeOf(cljw_nth_2), &cljw_nth_2);
-    try linker.defineFunc("cljw", "cljw_nth_3", @TypeOf(cljw_nth_3), &cljw_nth_3);
+    try linker.defineFuncCtx("cljw", "cljw_get_2", rt_ptr, @TypeOf(cljw_get_2), &cljw_get_2);
+    try linker.defineFuncCtx("cljw", "cljw_get_3", rt_ptr, @TypeOf(cljw_get_3), &cljw_get_3);
+    try linker.defineFuncCtx("cljw", "cljw_nth_2", rt_ptr, @TypeOf(cljw_nth_2), &cljw_nth_2);
+    try linker.defineFuncCtx("cljw", "cljw_nth_3", rt_ptr, @TypeOf(cljw_nth_3), &cljw_nth_3);
 }
