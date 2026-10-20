@@ -174,6 +174,20 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
 
+    // Differential backend tests (P99 suite) - requires wasm feature
+    if (wasm and zwasm_mod != null) {
+        const diff_test_mod = b.createModule(.{
+            .root_source_file = b.path("test/differential_backend_tests.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        diff_test_mod.addImport("zwasm", zwasm_mod.?);
+        const diff_tests = b.addTest(.{ .root_module = diff_test_mod });
+        const run_diff_tests = b.addRunArtifact(diff_tests);
+        const diff_test_step = b.step("test-diff", "Run differential backend tests (P99)");
+        diff_test_step.dependOn(&run_diff_tests.step);
+    }
+
     // `zig build lint` — zlinter rule chain (ADR-0003).
     // Runs where zlinter can be fetched from GitHub; the gate skips it on
     // hosts without network reach. Run with `--max-warnings 0` for strict

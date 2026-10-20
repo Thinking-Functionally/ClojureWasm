@@ -78,28 +78,28 @@ const lookup = @import("../../../runtime/collection/lookup.zig");
 /// Wasm signature: (i32, i32) -> i64
 pub fn vector_from_slice(caller: *zwasm.Caller, ptr: i32, len: i32) i64 {
     const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
-    const mem = caller.memory() orelse return @bitCast(Value.nil_val);
+    const mem = caller.memory() orelse return @bitCast(@intFromEnum(Value.nil_val));
     const alloc = caller.allocator();
 
-    if (len < 0) return @bitCast(Value.nil_val);
+    if (len < 0) return @bitCast(@intFromEnum(Value.nil_val));
     const elem_count: u32 = @intCast(len);
 
-    if (elem_count == 0) return @bitCast(vector.empty());
+    if (elem_count == 0) return @bitCast(@intFromEnum(vector.empty()));
 
     // Read elements from linear memory (8 bytes each)
-    var elements = alloc.alloc(Value, elem_count) catch return @bitCast(Value.nil_val);
+    var elements = alloc.alloc(Value, elem_count) catch return @bitCast(@intFromEnum(Value.nil_val));
     defer alloc.free(elements);
 
     const base_addr: u32 = @intCast(ptr);
     for (0..elem_count) |i| {
         const addr = base_addr + @as(u32, @intCast(i)) * 8;
-        const raw_val = mem.read(i64, addr) catch return @bitCast(Value.nil_val);
-        elements[i] = @bitCast(raw_val);
+        const raw_val = mem.read(i64, addr) catch return @bitCast(@intFromEnum(Value.nil_val));
+        elements[i] = @enumFromInt(@as(u64, @bitCast(raw_val)));
     }
 
     // Construct Clojure vector
-    const result = vector.fromSlice(rt, elements) catch return @bitCast(Value.nil_val);
-    return @bitCast(result);
+    const result = vector.fromSlice(rt, elements) catch return @bitCast(@intFromEnum(Value.nil_val));
+    return @bitCast(@intFromEnum(result));
 }
 
 /// map_from_pairs: 從 linear memory 構造 Map
@@ -112,16 +112,16 @@ pub fn vector_from_slice(caller: *zwasm.Caller, ptr: i32, len: i32) i64 {
 /// Wasm signature: (i32, i32) -> i64
 pub fn map_from_pairs(caller: *zwasm.Caller, ptr: i32, len: i32) i64 {
     const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
-    const mem = caller.memory() orelse return @bitCast(Value.nil_val);
+    const mem = caller.memory() orelse return @bitCast(@intFromEnum(Value.nil_val));
     const alloc = caller.allocator();
 
-    if (len < 0) return @bitCast(Value.nil_val);
+    if (len < 0) return @bitCast(@intFromEnum(Value.nil_val));
     const pair_count: u32 = @intCast(len);
 
-    if (pair_count == 0) return @bitCast(map_api.empty());
+    if (pair_count == 0) return @bitCast(@intFromEnum(map_api.empty()));
 
     // Read pairs (each pair is 16 bytes: key + value)
-    var pairs = alloc.alloc(Value, pair_count * 2) catch return @bitCast(Value.nil_val);
+    var pairs = alloc.alloc(Value, pair_count * 2) catch return @bitCast(@intFromEnum(Value.nil_val));
     defer alloc.free(pairs);
 
     const base_addr: u32 = @intCast(ptr);
@@ -129,16 +129,16 @@ pub fn map_from_pairs(caller: *zwasm.Caller, ptr: i32, len: i32) i64 {
         const key_addr = base_addr + @as(u32, @intCast(i)) * 16;
         const val_addr = key_addr + 8;
 
-        const raw_key = mem.read(i64, key_addr) catch return @bitCast(Value.nil_val);
-        const raw_val = mem.read(i64, val_addr) catch return @bitCast(Value.nil_val);
+        const raw_key = mem.read(i64, key_addr) catch return @bitCast(@intFromEnum(Value.nil_val));
+        const raw_val = mem.read(i64, val_addr) catch return @bitCast(@intFromEnum(Value.nil_val));
 
-        pairs[i * 2] = @bitCast(raw_key);
-        pairs[i * 2 + 1] = @bitCast(raw_val);
+        pairs[i * 2] = @enumFromInt(@as(u64, @bitCast(raw_key)));
+        pairs[i * 2 + 1] = @enumFromInt(@as(u64, @bitCast(raw_val)));
     }
 
     // Construct Clojure map
-    const result = map_api.fromLiteralPairs(rt, pairs) catch return @bitCast(Value.nil_val);
-    return @bitCast(result);
+    const result = map_api.fromLiteralPairs(rt, pairs) catch return @bitCast(@intFromEnum(Value.nil_val));
+    return @bitCast(@intFromEnum(result));
 }
 
 /// set_from_slice: 從 linear memory 構造 Set
@@ -150,31 +150,31 @@ pub fn map_from_pairs(caller: *zwasm.Caller, ptr: i32, len: i32) i64 {
 /// Wasm signature: (i32, i32) -> i64
 pub fn set_from_slice(caller: *zwasm.Caller, ptr: i32, len: i32) i64 {
     const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
-    const mem = caller.memory() orelse return @bitCast(Value.nil_val);
+    const mem = caller.memory() orelse return @bitCast(@intFromEnum(Value.nil_val));
     const alloc = caller.allocator();
 
-    if (len < 0) return @bitCast(Value.nil_val);
+    if (len < 0) return @bitCast(@intFromEnum(Value.nil_val));
     const elem_count: u32 = @intCast(len);
 
-    if (elem_count == 0) return @bitCast(set_mod.empty());
+    if (elem_count == 0) return @bitCast(@intFromEnum(set_mod.empty()));
 
     // Read elements
-    var elements = alloc.alloc(Value, elem_count) catch return @bitCast(Value.nil_val);
+    var elements = alloc.alloc(Value, elem_count) catch return @bitCast(@intFromEnum(Value.nil_val));
     defer alloc.free(elements);
 
     const base_addr: u32 = @intCast(ptr);
     for (0..elem_count) |i| {
         const addr = base_addr + @as(u32, @intCast(i)) * 8;
-        const raw_val = mem.read(i64, addr) catch return @bitCast(Value.nil_val);
-        elements[i] = @bitCast(raw_val);
+        const raw_val = mem.read(i64, addr) catch return @bitCast(@intFromEnum(Value.nil_val));
+        elements[i] = @enumFromInt(@as(u64, @bitCast(raw_val)));
     }
 
     // Construct set by conjing elements onto empty set
     var result = set_mod.empty();
     for (elements) |elem| {
-        result = set_mod.conj(rt, result, elem) catch return @bitCast(Value.nil_val);
+        result = set_mod.conj(rt, result, elem) catch return @bitCast(@intFromEnum(Value.nil_val));
     }
-    return @bitCast(result);
+    return @bitCast(@intFromEnum(result));
 }
 
 // ============================================================================
@@ -184,51 +184,63 @@ pub fn set_from_slice(caller: *zwasm.Caller, ptr: i32, len: i32) i64 {
 /// cljw_get_2: (get coll key)
 /// Wasm signature: (i64, i64) -> i64
 pub fn cljw_get_2(caller: *zwasm.Caller, coll_val: i64, key_val: i64) i64 {
-    const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
+    _ = caller;
+    const coll: Value = @enumFromInt(@as(u64, @bitCast(coll_val)));
+    const key: Value = @enumFromInt(@as(u64, @bitCast(key_val)));
 
-    const coll: Value = @bitCast(coll_val);
-    const key: Value = @bitCast(key_val);
-
-    const result = lookup.get(rt, coll, key) catch return @bitCast(Value.nil_val);
-    return @bitCast(result);
+    const result = map_api.get(coll, key) catch return @bitCast(@intFromEnum(Value.nil_val));
+    return @bitCast(@intFromEnum(result));
 }
 
 /// cljw_get_3: (get coll key not-found)
 /// Wasm signature: (i64, i64, i64) -> i64
 pub fn cljw_get_3(caller: *zwasm.Caller, coll_val: i64, key_val: i64, not_found: i64) i64 {
-    const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
+    _ = caller;
+    const coll: Value = @enumFromInt(@as(u64, @bitCast(coll_val)));
+    const key: Value = @enumFromInt(@as(u64, @bitCast(key_val)));
+    const default: Value = @enumFromInt(@as(u64, @bitCast(not_found)));
 
-    const coll: Value = @bitCast(coll_val);
-    const key: Value = @bitCast(key_val);
-    const default: Value = @bitCast(not_found);
-
-    const result = lookup.getOr(rt, coll, key, default) catch return not_found;
-    return @bitCast(result);
+    // Check if key exists via contains
+    const has_key = map_api.contains(coll, key) catch return not_found;
+    if (has_key) {
+        const result = map_api.get(coll, key) catch return not_found;
+        return @bitCast(@intFromEnum(result));
+    }
+    return @bitCast(@intFromEnum(default));
 }
 
 /// cljw_nth_2: (nth coll index)
 /// Wasm signature: (i64, i64) -> i64
 pub fn cljw_nth_2(caller: *zwasm.Caller, coll_val: i64, index_val: i64) i64 {
-    const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
+    _ = caller;
+    const coll: Value = @enumFromInt(@as(u64, @bitCast(coll_val)));
+    const index: Value = @enumFromInt(@as(u64, @bitCast(index_val)));
 
-    const coll: Value = @bitCast(coll_val);
-    const index: Value = @bitCast(index_val);
+    // Extract integer index
+    if (index.tag() != .integer) return @bitCast(@intFromEnum(Value.nil_val));
+    const idx = index.asInteger();
+    if (idx < 0) return @bitCast(@intFromEnum(Value.nil_val));
+    if (idx >= vector.count(coll)) return @bitCast(@intFromEnum(Value.nil_val));
 
-    const result = lookup.nth(rt, coll, index) catch return @bitCast(Value.nil_val);
-    return @bitCast(result);
+    const result = vector.nth(coll, @intCast(idx));
+    return @bitCast(@intFromEnum(result));
 }
 
 /// cljw_nth_3: (nth coll index not-found)
 /// Wasm signature: (i64, i64, i64) -> i64
 pub fn cljw_nth_3(caller: *zwasm.Caller, coll_val: i64, index_val: i64, not_found: i64) i64 {
-    const rt: *Runtime = @ptrCast(@alignCast(caller.data(*Runtime)));
+    _ = caller;
+    const coll: Value = @enumFromInt(@as(u64, @bitCast(coll_val)));
+    const index: Value = @enumFromInt(@as(u64, @bitCast(index_val)));
+    const default: Value = @enumFromInt(@as(u64, @bitCast(not_found)));
 
-    const coll: Value = @bitCast(coll_val);
-    const index: Value = @bitCast(index_val);
-    const default: Value = @bitCast(not_found);
+    // Extract integer index
+    if (index.tag() != .integer) return @bitCast(@intFromEnum(default));
+    const idx = index.asInteger();
+    if (idx < 0 or idx >= vector.count(coll)) return @bitCast(@intFromEnum(default));
 
-    const result = lookup.nthOr(rt, coll, index, default) catch return not_found;
-    return @bitCast(result);
+    const result = vector.nth(coll, @intCast(idx));
+    return @bitCast(@intFromEnum(result));
 }
 
 // ============================================================================
