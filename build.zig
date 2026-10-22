@@ -174,6 +174,38 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_exe_tests.step);
 
+    // WasmGC backend tests (Phase 4 Month 1)
+    const wasmgc_test_mod = b.createModule(.{
+        .root_source_file = b.path("test/wasmgc/literals_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    // Shared modules for WasmGC backend and tests
+    const runtime_mod = b.createModule(.{
+        .root_source_file = b.path("src/runtime/Runtime.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const value_types_mod = b.createModule(.{
+        .root_source_file = b.path("src/eval/backend/wasmgc/value_types.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const wasmgc_mod = b.createModule(.{
+        .root_source_file = b.path("src/eval/backend/wasmgc.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    wasmgc_mod.addImport("Runtime", runtime_mod);
+
+    // Test module needs access to source modules
+    wasmgc_test_mod.addImport("wasmgc", wasmgc_mod);
+    wasmgc_test_mod.addImport("value_types", value_types_mod);
+    wasmgc_test_mod.addImport("Runtime", runtime_mod);
+    const wasmgc_tests = b.addTest(.{ .root_module = wasmgc_test_mod });
+    const run_wasmgc_tests = b.addRunArtifact(wasmgc_tests);
+    test_step.dependOn(&run_wasmgc_tests.step);
+
     // `zig build lint` — zlinter rule chain (ADR-0003).
     // Runs where zlinter can be fetched from GitHub; the gate skips it on
     // hosts without network reach. Run with `--max-warnings 0` for strict
