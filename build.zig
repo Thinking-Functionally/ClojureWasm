@@ -292,6 +292,11 @@ pub fn build(b: *std.Build) void {
     wasmgc_month3_test_mod.addImport("value_types", value_types_mod);
     wasmgc_month3_test_mod.addImport("functions", wasmgc_functions_mod);
 
+    // Month 3 test module imports
+    wasmgc_month3_test_mod.addImport("compiler", wasmgc_compiler_mod);
+    wasmgc_month3_test_mod.addImport("value_types", value_types_mod);
+    wasmgc_month3_test_mod.addImport("functions", wasmgc_functions_mod);
+
     const wasmgc_tests = b.addTest(.{ .root_module = wasmgc_test_mod });
     const run_wasmgc_tests = b.addRunArtifact(wasmgc_tests);
 

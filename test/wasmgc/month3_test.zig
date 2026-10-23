@@ -24,14 +24,14 @@ test "compile fn* - simple lambda" {
     const x_ref = compiler.ASTNode{ .var_ref = .{ .name = "x" } };
     const body = [_]compiler.ASTNode{x_ref};
 
-    var fn_expr = compiler.ASTNode{ .fn_expr = .{
-        .params = &params,
-        .body = &body,
+    const fn_expr = compiler.ASTNode{ .fn_expr = .{
+        .params = @constCast(&params),
+        .body = @constCast(&body),
     } };
 
     const def_form = compiler.ASTNode{ .def = .{
         .name = "identity",
-        .init = &fn_expr,
+        .init = @constCast(&fn_expr),
     } };
 
     var forms = [_]compiler.ASTNode{def_form};
@@ -57,14 +57,14 @@ test "compile fn* - two parameters" {
     const x_ref = compiler.ASTNode{ .var_ref = .{ .name = "x" } };
     const body = [_]compiler.ASTNode{x_ref};
 
-    var fn_expr = compiler.ASTNode{ .fn_expr = .{
-        .params = &params,
-        .body = &body,
+    const fn_expr = compiler.ASTNode{ .fn_expr = .{
+        .params = @constCast(&params),
+        .body = @constCast(&body),
     } };
 
     const def_form = compiler.ASTNode{ .def = .{
         .name = "const_fn",
-        .init = &fn_expr,
+        .init = @constCast(&fn_expr),
     } };
 
     var forms = [_]compiler.ASTNode{def_form};
@@ -90,14 +90,14 @@ test "compile closure - captured variable" {
     const y_ref = compiler.ASTNode{ .var_ref = .{ .name = "y" } };
     const fn_body = [_]compiler.ASTNode{y_ref};
 
-    var fn_expr = compiler.ASTNode{ .fn_expr = .{
-        .params = &params,
-        .body = &fn_body,
+    const fn_expr = compiler.ASTNode{ .fn_expr = .{
+        .params = @constCast(&params),
+        .body = @constCast(&fn_body),
     } };
 
     var let_body = [_]compiler.ASTNode{fn_expr};
     var let_expr = compiler.ASTNode{ .let_expr = .{
-        .bindings = &bindings,
+        .bindings = @constCast(&bindings),
         .body = &let_body,
     } };
 
@@ -130,14 +130,14 @@ test "compile loop* - simple loop" {
     const x_ref = compiler.ASTNode{ .var_ref = .{ .name = "x" } };
     const body = [_]compiler.ASTNode{x_ref};
 
-    var loop_expr = compiler.ASTNode{ .loop_expr = .{
-        .bindings = &bindings,
-        .body = &body,
+    const loop_expr = compiler.ASTNode{ .loop_expr = .{
+        .bindings = @constCast(&bindings),
+        .body = @constCast(&body),
     } };
 
     const def_form = compiler.ASTNode{ .def = .{
         .name = "simple_loop",
-        .init = &loop_expr,
+        .init = @constCast(&loop_expr),
     } };
 
     var forms = [_]compiler.ASTNode{def_form};
@@ -162,14 +162,14 @@ test "compile recur - tail recursion" {
 
     const body = [_]compiler.ASTNode{recur_expr};
 
-    var loop_expr = compiler.ASTNode{ .loop_expr = .{
-        .bindings = &bindings,
-        .body = &body,
+    const loop_expr = compiler.ASTNode{ .loop_expr = .{
+        .bindings = @constCast(&bindings),
+        .body = @constCast(&body),
     } };
 
     const def_form = compiler.ASTNode{ .def = .{
         .name = "tail_recur",
-        .init = &loop_expr,
+        .init = @constCast(&loop_expr),
     } };
 
     var forms = [_]compiler.ASTNode{def_form};
@@ -196,8 +196,8 @@ test "compile higher-order function - map stub" {
 
     const defn = compiler.ASTNode{ .defn = .{
         .name = "map",
-        .params = &params,
-        .body = &body,
+        .params = @constCast(&params),
+        .body = @constCast(&body),
     } };
 
     var forms = [_]compiler.ASTNode{defn};
@@ -224,9 +224,9 @@ test "compile multi-function module" {
     const x_ref = compiler.ASTNode{ .var_ref = .{ .name = "x" } };
     var add_body = [_]compiler.ASTNode{x_ref};
 
-    var add_defn = compiler.ASTNode{ .defn = .{
+    const add_defn = compiler.ASTNode{ .defn = .{
         .name = "add",
-        .params = &params,
+        .params = @constCast(&params),
         .body = &add_body,
     } };
 
@@ -235,8 +235,8 @@ test "compile multi-function module" {
 
     const mul_defn = compiler.ASTNode{ .defn = .{
         .name = "mul",
-        .params = &params,
-        .body = &mul_body,
+        .params = @constCast(&params),
+        .body = @constCast(&mul_body),
     } };
 
     var forms = [_]compiler.ASTNode{ add_defn, mul_defn };
@@ -252,7 +252,7 @@ test "compile def and defn interaction" {
     // (def x 42)
     // (defn get-x [] x)
     var x_val = compiler.ASTNode{ .literal = .{ .value = .{ .long = 42 } } };
-    var def_x = compiler.ASTNode{ .def = .{
+    const def_x = compiler.ASTNode{ .def = .{
         .name = "x",
         .init = &x_val,
     } };
@@ -261,10 +261,10 @@ test "compile def and defn interaction" {
     const x_ref = compiler.ASTNode{ .var_ref = .{ .name = "x" } };
     const body = [_]compiler.ASTNode{x_ref};
 
-    var get_x_defn = compiler.ASTNode{ .defn = .{
+    const get_x_defn = compiler.ASTNode{ .defn = .{
         .name = "get_x",
         .params = &empty_params,
-        .body = &body,
+        .body = @constCast(&body),
     } };
 
     var forms = [_]compiler.ASTNode{ def_x, get_x_defn };
@@ -295,8 +295,8 @@ test "compile fibonacci stub - defn with self-recursion" {
 
     const fib_defn = compiler.ASTNode{ .defn = .{
         .name = "fib",
-        .params = &params,
-        .body = &body,
+        .params = @constCast(&params),
+        .body = @constCast(&body),
     } };
 
     var forms = [_]compiler.ASTNode{fib_defn};
@@ -314,27 +314,27 @@ test "compile factorial stub with loop*" {
     const params = [_][]const u8{param_n};
 
     var acc_val = compiler.ASTNode{ .literal = .{ .value = .{ .long = 1 } } };
-    var acc_binding = compiler.Binding{ .name = "acc", .init = &acc_val };
+    const acc_binding = compiler.Binding{ .name = "acc", .init = &acc_val };
 
     const n_ref = compiler.ASTNode{ .var_ref = .{ .name = "n" } };
-    var i_binding = compiler.Binding{ .name = "i", .init = &n_ref };
+    const i_binding = compiler.Binding{ .name = "i", .init = @constCast(&n_ref) };
 
     const bindings = [_]compiler.Binding{ acc_binding, i_binding };
 
-    var acc_ref = compiler.ASTNode{ .var_ref = .{ .name = "acc" } };
+    const acc_ref = compiler.ASTNode{ .var_ref = .{ .name = "acc" } };
     const loop_body = [_]compiler.ASTNode{acc_ref};
 
-    var loop_expr = compiler.ASTNode{ .loop_expr = .{
-        .bindings = &bindings,
-        .body = &loop_body,
+    const loop_expr = compiler.ASTNode{ .loop_expr = .{
+        .bindings = @constCast(&bindings),
+        .body = @constCast(&loop_body),
     } };
 
     const fn_body = [_]compiler.ASTNode{loop_expr};
 
-    var fact_defn = compiler.ASTNode{ .defn = .{
+    const fact_defn = compiler.ASTNode{ .defn = .{
         .name = "fact",
-        .params = &params,
-        .body = &fn_body,
+        .params = @constCast(&params),
+        .body = @constCast(&fn_body),
     } };
 
     var forms = [_]compiler.ASTNode{fact_defn};

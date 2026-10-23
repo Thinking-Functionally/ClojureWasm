@@ -75,7 +75,7 @@ pub const FunctionContext = struct {
             .arity = arity,
             .locals = std.StringHashMap(LocalBinding).init(allocator),
             .next_local_index = arity, // params occupy first N locals
-            .loop_stack = std.ArrayList(LoopContext).init(allocator),
+            .loop_stack = .{ .items = &.{}, .capacity = 0 },
             .captures = std.StringHashMap(CapturedVar).init(allocator),
             .parent = parent,
         };
@@ -83,7 +83,6 @@ pub const FunctionContext = struct {
 
     pub fn deinit(self: *FunctionContext) void {
         self.locals.deinit();
-        self.loop_stack.deinit();
         self.captures.deinit();
     }
 
@@ -158,7 +157,9 @@ pub const VarLocation = union(enum) {
 pub const FunctionDef = struct {
     name: []const u8,
     arity: u32,
-    wat_body: []const u8,
+    params: [][]const u8,
+    body: []const u8,
+    captures: []CapturedVar,
 };
 
 /// AST node types (mirrors src/eval/analyzer/ output)
@@ -272,6 +273,27 @@ pub fn compileModule(allocator: Allocator, forms: []ASTNode) ![]const u8 {
         try compileTopLevelForm(&ctx, form);
     }
 
+    // Emit all collected functions (from fn* expressions)
+    for (ctx.functions.items) |func| {
+        try ctx.wat_output.appendSlice("  (func $");
+        try ctx.wat_output.appendSlice(func.name);
+
+        // Parameters
+        for (func.params) |param| {
+            try ctx.wat_output.appendSlice(" (param $");
+            try ctx.wat_output.appendSlice(param);
+            try ctx.wat_output.appendSlice(" (ref $Value))");
+        }
+
+        // Return type
+        try ctx.wat_output.appendSlice(" (result (ref $Value))\n");
+
+        // Body (already contains indentation from compileFn)
+        try ctx.wat_output.appendSlice(func.body);
+
+        try ctx.wat_output.appendSlice("  )\n");
+    }
+
     // Close module
     try ctx.wat_output.appendSlice(")\n");
 
@@ -324,7 +346,7 @@ fn compileDefn(ctx: *CompileContext, fn_def: Defn) !void {
     try ctx.wat_output.appendSlice(" (result (ref $Value))\n");
 
     // Create function context
-    var func_ctx = try FunctionContext.init(ctx.allocator, fn_def.name, @intCast(fn_def.params.len));
+    var func_ctx = try FunctionContext.init(ctx.allocator, fn_def.name, @intCast(fn_def.params.len), null);
     defer func_ctx.deinit();
     ctx.current_func = &func_ctx;
 
@@ -352,7 +374,7 @@ fn compileDefn(ctx: *CompileContext, fn_def: Defn) !void {
 }
 
 /// Compile an expression
-pub fn compileExpr(ctx: *CompileContext, node: ASTNode) error{OutOfMemory,InvalidExpression,UndefinedVariable,LetOutsideFunction,NotImplementedYet,LoopOutsideFunction,RecurOutsideFunction,RecurWithoutLoop,NoSpaceLeft,InvalidTopLevelForm}!void {
+pub fn compileExpr(ctx: *CompileContext, node: ASTNode) error{ OutOfMemory, InvalidExpression, UndefinedVariable, LetOutsideFunction, NotImplementedYet, LoopOutsideFunction, RecurOutsideFunction, RecurWithoutLoop, NoSpaceLeft, InvalidTopLevelForm }!void {
     switch (node) {
         .literal => |lit| try compileLiteral(ctx, lit),
         .var_ref => |v| try compileVarRef(ctx, v),
@@ -557,8 +579,8 @@ fn compileFn(ctx: *CompileContext, fn_expr: FnExpr) !void {
                     .local => |local| {
                         try func_ctx.captures.put(param_name, .{
                             .name = param_name,
-                            .index = @intCast(func_ctx.captures.count()),
-                            .source_local = local.index,
+                            .capture_index = @intCast(func_ctx.captures.count()),
+                            .wat_type = local.wat_type,
                         });
                     },
                     .capture => {},
@@ -571,8 +593,8 @@ fn compileFn(ctx: *CompileContext, fn_expr: FnExpr) !void {
     // Register parameters as locals
     for (fn_expr.params, 0..) |param_name, i| {
         try func_ctx.locals.put(param_name, .{
-            .name = param_name,
             .index = @intCast(i),
+            .wat_type = "(ref $Value)",
         });
     }
 
@@ -599,6 +621,7 @@ fn compileFn(ctx: *CompileContext, fn_expr: FnExpr) !void {
     // Register the function
     try ctx.functions.append(.{
         .name = try ctx.allocator.dupe(u8, func_name),
+        .arity = @intCast(fn_expr.params.len),
         .params = try ctx.allocator.dupe([]const u8, fn_expr.params),
         .body = body,
         .captures = try ctx.allocator.alloc(CapturedVar, func_ctx.captures.count()),
