@@ -1,0 +1,73 @@
+# Test expressions for differential testing
+# One expression per line; comments start with #
+
+# Basic arithmetic
+(+ 1 2)
+(- 10 3)
+(* 5 6)
+(/ 20 4)
+
+# Nested expressions
+(+ (* 2 3) (- 10 5))
+(* (+ 1 2) (+ 3 4))
+
+# Collections
+[1 2 3]
+{:a 1 :b 2}
+'(1 2 3)
+#{1 2 3}
+
+# Collection operations
+(conj [1 2] 3)
+(assoc {:a 1} :b 2)
+(get {:x 10} :x)
+(first [1 2 3])
+(rest [1 2 3])
+(count [1 2 3 4])
+
+# Conditionals
+(if true 1 0)
+(if false 1 0)
+(if nil 1 0)
+
+# Let bindings
+(let [x 10] x)
+(let [x 10 y 20] (+ x y))
+(let [x 5 y (* x 2)] y)
+
+# Functions
+((fn [x] (* x 2)) 5)
+((fn [x y] (+ x y)) 3 7)
+
+# Recursion with loop/recur
+(loop [x 0 n 5] (if (= n 0) x (recur (+ x 1) (- n 1))))
+
+# Higher-order functions (when implemented)
+(map inc [1 2 3])
+(filter even? [1 2 3 4])
+(reduce + [1 2 3 4])
+
+# Comparisons
+(= 5 5)
+(< 3 5)
+(> 10 7)
+(<= 5 5)
+(>= 10 5)
+
+# Type predicates
+(nil? nil)
+(nil? 5)
+(number? 42)
+(string? "hello")
+(vector? [1 2 3])
+
+# String operations
+(str "hello" " " "world")
+(count "hello")
+
+# Boolean logic
+(and true true)
+(and true false)
+(or false true)
+(not true)
+(not false)
