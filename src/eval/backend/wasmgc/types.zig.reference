@@ -1,4 +1,18 @@
 // SPDX-License-Identifier: EPL-2.0
+//! **ARCHIVED REFERENCE FILE - DO NOT USE**
+//!
+//! This file contains the original static WAT type definitions from Month 1-2.
+//! It has been superseded by value_types.zig which generates types dynamically.
+//!
+//! Kept as reference for:
+//! - Original type design documentation
+//! - Static type string templates
+//! - Design rationale comments
+//!
+//! See value_types.zig for the current dynamic type generation system.
+//!
+//! ============================================================================
+//! ORIGINAL HEADER:
 //! WasmGC backend type definitions and mapping
 //!
 //! This module defines the WAT type system for ClojureWasm's WasmGC backend.
