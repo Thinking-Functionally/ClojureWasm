@@ -17,7 +17,7 @@
 //! - WAT output is human-readable with consistent indentation
 
 const std = @import("std");
-const types = @import("types");
+const types = @import("value_types");
 const Allocator = std.mem.Allocator;
 
 /// WAT text builder with indentation support

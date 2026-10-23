@@ -18,7 +18,7 @@
 //! - Function-level compilation unit (each defn → one WAT func)
 
 const std = @import("std");
-const types = @import("types");
+const value_types = @import("value_types");
 const Allocator = std.mem.Allocator;
 
 /// Compilation context for a single module
@@ -52,6 +52,7 @@ pub const CompileContext = struct {
 
 /// Function compilation context
 pub const FunctionContext = struct {
+    allocator: Allocator,
     /// Function name (for defn)
     name: []const u8,
     /// Arity (parameter count)
@@ -61,21 +62,60 @@ pub const FunctionContext = struct {
     /// Next available local index
     next_local_index: u32,
     /// Loop context stack (for recur target resolution)
-    loop_stack: std.array_list.Managed(LoopContext),
+    loop_stack: std.ArrayList(LoopContext),
+    /// Captured variables from outer scope (for closures)
+    captures: std.StringHashMap(CapturedVar),
+    /// Parent context (for closure nesting)
+    parent: ?*FunctionContext,
 
-    pub fn init(allocator: Allocator, name: []const u8, arity: u32) !FunctionContext {
+    pub fn init(allocator: Allocator, name: []const u8, arity: u32, parent: ?*FunctionContext) !FunctionContext {
         return .{
+            .allocator = allocator,
             .name = name,
             .arity = arity,
             .locals = std.StringHashMap(LocalBinding).init(allocator),
             .next_local_index = arity, // params occupy first N locals
-            .loop_stack = std.array_list.Managed(LoopContext).init(allocator),
+            .loop_stack = std.ArrayList(LoopContext).init(allocator),
+            .captures = std.StringHashMap(CapturedVar).init(allocator),
+            .parent = parent,
         };
     }
 
     pub fn deinit(self: *FunctionContext) void {
         self.locals.deinit();
         self.loop_stack.deinit();
+        self.captures.deinit();
+    }
+
+    /// Look up a variable (params, locals, captures, or parent scope)
+    pub fn lookupVar(self: *FunctionContext, name: []const u8) ?VarLocation {
+        // Check local bindings first
+        if (self.locals.get(name)) |local| {
+            return .{ .local = local };
+        }
+
+        // Check captures
+        if (self.captures.get(name)) |cap| {
+            return .{ .capture = cap };
+        }
+
+        // Recurse to parent (for nested closures)
+        if (self.parent) |parent| {
+            if (parent.lookupVar(name)) |loc| {
+                // Variables from parent need to be captured
+                return loc;
+            }
+        }
+
+        return null;
+    }
+
+    /// Allocate a new local variable
+    pub fn allocLocal(self: *FunctionContext, name: []const u8, wat_type: []const u8) !u32 {
+        const index = self.next_local_index;
+        self.next_local_index += 1;
+        try self.locals.put(name, .{ .index = index, .wat_type = wat_type });
+        return index;
     }
 };
 
@@ -95,6 +135,23 @@ pub const LocalBinding = struct {
 pub const LoopContext = struct {
     label: []const u8,
     arity: u32,
+};
+
+/// Captured variable for closures
+pub const CapturedVar = struct {
+    /// Index in closure's capture array
+    capture_index: u32,
+    /// Original name
+    name: []const u8,
+    /// Type
+    wat_type: []const u8,
+};
+
+/// Variable location (local, capture, or global)
+pub const VarLocation = union(enum) {
+    local: LocalBinding,
+    capture: CapturedVar,
+    global: GlobalBinding,
 };
 
 /// Function definition
@@ -193,15 +250,22 @@ pub fn compileModule(allocator: Allocator, forms: []ASTNode) ![]const u8 {
     // Emit WAT module header
     try ctx.wat_output.appendSlice("(module\n");
 
-    // Emit type definitions from types.zig
+    // Emit type definitions using dynamic generator
     try ctx.wat_output.appendSlice("  ;; Type definitions\n");
-    try ctx.wat_output.appendSlice("  ");
-    try ctx.wat_output.appendSlice(types.WATTypes.value_struct);
-    try ctx.wat_output.appendSlice("\n  ");
-    try ctx.wat_output.appendSlice(types.WATTypes.value_data_union);
-    try ctx.wat_output.appendSlice("\n  ");
-    try ctx.wat_output.appendSlice(types.WATTypes.string_struct);
-    try ctx.wat_output.appendSlice("\n\n");
+    var type_gen = value_types.WatTypeGen.init(allocator);
+    const type_defs = try type_gen.emitAllTypes();
+    defer allocator.free(type_defs);
+
+    // Indent type definitions
+    var lines = std.mem.splitScalar(u8, type_defs, '\n');
+    while (lines.next()) |line| {
+        if (line.len > 0) {
+            try ctx.wat_output.appendSlice("  ");
+            try ctx.wat_output.appendSlice(line);
+        }
+        try ctx.wat_output.appendSlice("\n");
+    }
+    try ctx.wat_output.appendSlice("\n");
 
     // Compile each top-level form
     for (forms) |form| {
@@ -309,14 +373,14 @@ fn compileLiteral(ctx: *CompileContext, lit: Literal) !void {
         .nil => {
             try ctx.wat_output.appendSlice("(struct.new $Value\n");
             try ctx.wat_output.appendSlice("      (i32.const ");
-            try ctx.wat_output.appendSlice(types.ValueTag.nil.toWAT());
+            try ctx.wat_output.appendSlice(value_types.TypeTag.nil.toWAT());
             try ctx.wat_output.appendSlice(")\n");
             try ctx.wat_output.appendSlice("      (ref.null $ValueData))");
         },
         .boolean => |b| {
             try ctx.wat_output.appendSlice("(struct.new $Value\n");
             try ctx.wat_output.appendSlice("      (i32.const ");
-            try ctx.wat_output.appendSlice(types.ValueTag.boolean.toWAT());
+            try ctx.wat_output.appendSlice(value_types.TypeTag.boolean.toWAT());
             try ctx.wat_output.appendSlice(")\n");
             try ctx.wat_output.appendSlice("      (union.new $ValueData $boolean (i32.const ");
             try ctx.wat_output.appendSlice(if (b) "1" else "0");
@@ -325,7 +389,7 @@ fn compileLiteral(ctx: *CompileContext, lit: Literal) !void {
         .long => |n| {
             try ctx.wat_output.appendSlice("(struct.new $Value\n");
             try ctx.wat_output.appendSlice("      (i32.const ");
-            try ctx.wat_output.appendSlice(types.ValueTag.long.toWAT());
+            try ctx.wat_output.appendSlice(value_types.TypeTag.long.toWAT());
             try ctx.wat_output.appendSlice(")\n");
             try ctx.wat_output.appendSlice("      (union.new $ValueData $long (i64.const ");
             var buf: [32]u8 = undefined;
@@ -336,11 +400,12 @@ fn compileLiteral(ctx: *CompileContext, lit: Literal) !void {
         .double => |f| {
             try ctx.wat_output.appendSlice("(struct.new $Value\n");
             try ctx.wat_output.appendSlice("      (i32.const ");
-            try ctx.wat_output.appendSlice(types.ValueTag.double.toWAT());
+            try ctx.wat_output.appendSlice(value_types.TypeTag.double.toWAT());
             try ctx.wat_output.appendSlice(")\n");
             try ctx.wat_output.appendSlice("      (union.new $ValueData $double (f64.const ");
             var buf: [32]u8 = undefined;
             const str = try std.fmt.bufPrint(&buf, "{d}", .{f});
+            try ctx.wat_output.appendSlice(str);
             try ctx.wat_output.appendSlice(str);
             try ctx.wat_output.appendSlice(")))");
         },
@@ -476,11 +541,94 @@ fn compileDo(ctx: *CompileContext, do_expr: DoExpr) !void {
 
 /// Compile a fn expression (lambda)
 fn compileFn(ctx: *CompileContext, fn_expr: FnExpr) !void {
-    _ = ctx;
-    _ = fn_expr;
-    // TODO: Implement closure compilation with environment capture
-    // This requires allocating a $Function struct and storing captured locals
-    return error.NotImplementedYet;
+    // Generate unique function name
+    var func_name_buf: [64]u8 = undefined;
+    const func_name = try std.fmt.bufPrint(&func_name_buf, "fn_{d}", .{ctx.functions.items.len});
+
+    // Create function context
+    var func_ctx = try FunctionContext.init(ctx.allocator, func_name, @intCast(fn_expr.params.len), ctx.current_func);
+    defer func_ctx.deinit();
+
+    // Analyze captures from parent scope
+    if (ctx.current_func) |parent| {
+        for (fn_expr.params) |param_name| {
+            if (parent.lookupVar(param_name)) |loc| {
+                switch (loc) {
+                    .local => |local| {
+                        try func_ctx.captures.put(param_name, .{
+                            .name = param_name,
+                            .index = @intCast(func_ctx.captures.count()),
+                            .source_local = local.index,
+                        });
+                    },
+                    .capture => {},
+                    .global => {},
+                }
+            }
+        }
+    }
+
+    // Register parameters as locals
+    for (fn_expr.params, 0..) |param_name, i| {
+        try func_ctx.locals.put(param_name, .{
+            .name = param_name,
+            .index = @intCast(i),
+        });
+    }
+
+    // Compile function body to temporary buffer
+    var body_output = std.array_list.Managed(u8).init(ctx.allocator);
+    defer body_output.deinit();
+
+    const saved_func = ctx.current_func;
+    const saved_output = ctx.wat_output;
+    ctx.current_func = &func_ctx;
+    ctx.wat_output = body_output;
+
+    for (fn_expr.body, 0..) |expr, i| {
+        try compileExpr(ctx, expr);
+        if (i < fn_expr.body.len - 1) {
+            try ctx.wat_output.appendSlice("\n      drop\n      ");
+        }
+    }
+
+    const body = try ctx.wat_output.toOwnedSlice();
+    ctx.current_func = saved_func;
+    ctx.wat_output = saved_output;
+
+    // Register the function
+    try ctx.functions.append(.{
+        .name = try ctx.allocator.dupe(u8, func_name),
+        .params = try ctx.allocator.dupe([]const u8, fn_expr.params),
+        .body = body,
+        .captures = try ctx.allocator.alloc(CapturedVar, func_ctx.captures.count()),
+    });
+
+    // Emit closure construction (struct.new $Function)
+    try ctx.wat_output.appendSlice("(struct.new $Function\n");
+    try ctx.wat_output.appendSlice("      (ref.func $");
+    try ctx.wat_output.appendSlice(func_name);
+    try ctx.wat_output.appendSlice(")\n");
+
+    // Capture array
+    if (func_ctx.captures.count() > 0) {
+        try ctx.wat_output.appendSlice("      (array.new_fixed $CaptureArray ");
+        var buf: [16]u8 = undefined;
+        const count_str = try std.fmt.bufPrint(&buf, "{d}", .{func_ctx.captures.count()});
+        try ctx.wat_output.appendSlice(count_str);
+
+        var it = func_ctx.captures.iterator();
+        while (it.next()) |entry| {
+            try ctx.wat_output.appendSlice(" (local.get $");
+            try ctx.wat_output.appendSlice(entry.key_ptr.*);
+            try ctx.wat_output.appendSlice(")");
+        }
+        try ctx.wat_output.appendSlice(")");
+    } else {
+        try ctx.wat_output.appendSlice("      (ref.null $CaptureArray)");
+    }
+
+    try ctx.wat_output.appendSlice(")");
 }
 
 /// Compile a loop expression

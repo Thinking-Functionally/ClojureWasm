@@ -202,6 +202,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Month 3 tests module (Functions, Closures, Namespaces)
+    const wasmgc_month3_test_mod = b.createModule(.{
+        .root_source_file = b.path("test/wasmgc/month3_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Shared modules for WasmGC backend and tests
     const runtime_mod = b.createModule(.{
         .root_source_file = b.path("src/runtime/Runtime.zig"),
@@ -214,31 +221,27 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Create modules for compiler components
-    const wasmgc_types_mod = b.createModule(.{
-        .root_source_file = b.path("src/eval/backend/wasmgc/types.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    // Create modules for compiler components (using value_types)
+    const wasmgc_types_mod = value_types_mod; // Alias for backward compat during migration
     const wasmgc_runtime_mod = b.createModule(.{
         .root_source_file = b.path("src/eval/backend/wasmgc/runtime.zig"),
         .target = target,
         .optimize = optimize,
     });
-    wasmgc_runtime_mod.addImport("types", wasmgc_types_mod);
+    wasmgc_runtime_mod.addImport("value_types", value_types_mod);
     const wasmgc_compiler_mod = b.createModule(.{
         .root_source_file = b.path("src/eval/backend/wasmgc/compiler.zig"),
         .target = target,
         .optimize = optimize,
     });
-    wasmgc_compiler_mod.addImport("types", wasmgc_types_mod);
+    wasmgc_compiler_mod.addImport("value_types", value_types_mod);
 
     const wasmgc_codegen_mod = b.createModule(.{
         .root_source_file = b.path("src/eval/backend/wasmgc/codegen.zig"),
         .target = target,
         .optimize = optimize,
     });
-    wasmgc_codegen_mod.addImport("types", wasmgc_types_mod);
+    wasmgc_codegen_mod.addImport("value_types", value_types_mod);
     wasmgc_runtime_mod.addImport("codegen", wasmgc_codegen_mod);
 
     const wasmgc_collections_mod = b.createModule(.{
@@ -246,9 +249,17 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    wasmgc_collections_mod.addImport("types", wasmgc_types_mod);
+    wasmgc_collections_mod.addImport("value_types", value_types_mod);
     wasmgc_collections_mod.addImport("codegen", wasmgc_codegen_mod);
     wasmgc_collections_mod.addImport("runtime", wasmgc_runtime_mod);
+
+    const wasmgc_functions_mod = b.createModule(.{
+        .root_source_file = b.path("src/eval/backend/wasmgc/functions.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    wasmgc_functions_mod.addImport("compiler", wasmgc_compiler_mod);
+    wasmgc_functions_mod.addImport("value_types", value_types_mod);
 
     const wasmgc_mod = b.createModule(.{
         .root_source_file = b.path("src/eval/backend/wasmgc.zig"),
@@ -265,7 +276,7 @@ pub fn build(b: *std.Build) void {
     // Compiler test module imports
     wasmgc_compiler_test_mod.addImport("compiler", wasmgc_compiler_mod);
     wasmgc_compiler_test_mod.addImport("runtime", wasmgc_runtime_mod);
-    wasmgc_compiler_test_mod.addImport("types", wasmgc_types_mod);
+    wasmgc_compiler_test_mod.addImport("value_types", value_types_mod);
 
     // Collections test module imports
     wasmgc_collections_test_mod.addImport("codegen", wasmgc_codegen_mod);
@@ -275,6 +286,11 @@ pub fn build(b: *std.Build) void {
     // E2E test module imports
     wasmgc_e2e_test_mod.addImport("compiler", wasmgc_compiler_mod);
     wasmgc_e2e_test_mod.addImport("types", wasmgc_types_mod);
+
+    // Month 3 test module imports
+    wasmgc_month3_test_mod.addImport("compiler", wasmgc_compiler_mod);
+    wasmgc_month3_test_mod.addImport("value_types", value_types_mod);
+    wasmgc_month3_test_mod.addImport("functions", wasmgc_functions_mod);
 
     const wasmgc_tests = b.addTest(.{ .root_module = wasmgc_test_mod });
     const run_wasmgc_tests = b.addRunArtifact(wasmgc_tests);
@@ -288,10 +304,14 @@ pub fn build(b: *std.Build) void {
     const wasmgc_e2e_tests = b.addTest(.{ .root_module = wasmgc_e2e_test_mod });
     const run_wasmgc_e2e_tests = b.addRunArtifact(wasmgc_e2e_tests);
 
+    const wasmgc_month3_tests = b.addTest(.{ .root_module = wasmgc_month3_test_mod });
+    const run_wasmgc_month3_tests = b.addRunArtifact(wasmgc_month3_tests);
+
     test_step.dependOn(&run_wasmgc_tests.step);
     test_step.dependOn(&run_wasmgc_compiler_tests.step);
     test_step.dependOn(&run_wasmgc_collections_tests.step);
     test_step.dependOn(&run_wasmgc_e2e_tests.step);
+    test_step.dependOn(&run_wasmgc_month3_tests.step);
 
     // `zig build lint` — zlinter rule chain (ADR-0003).
     // Runs where zlinter can be fetched from GitHub; the gate skips it on

@@ -16,7 +16,7 @@
 //! - Hash caching for immutable types (strings, symbols, keywords)
 
 const std = @import("std");
-const types = @import("types");
+const types = @import("value_types");
 const codegen = @import("codegen");
 const Allocator = std.mem.Allocator;
 

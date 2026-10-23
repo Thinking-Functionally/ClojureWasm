@@ -12,12 +12,14 @@
 // - No GC dependency (WasmGC manages lifetimes)
 
 const std = @import("std");
-const types = @import("types");
+const types = @import("value_types");
 const codegen = @import("codegen");
 const runtime = @import("runtime");
 
-const Value = types.Value;
-const ValueType = types.ValueType;
+// Note: Value and ValueType are forward references for API design.
+// Actual implementation will be defined when the compiler is complete.
+// const Value = types.Value;
+// const ValueType = types.ValueType;
 const WAT = codegen.WAT;
 
 // ============================================================================
@@ -49,7 +51,7 @@ pub fn generateVectorTypeDef(wat: *WAT) !void {
 }
 
 /// Compiles vector literal: [1 2 3] → (call $vector.new ...)
-pub fn compileVectorLiteral(wat: *WAT, elements: []const Value) !void {
+pub fn compileVectorLiteral(wat: *WAT, elements: anytype) !void {
     try wat.append("(call $vector.new");
     for (elements) |elem| {
         try wat.append(" ");
@@ -233,7 +235,7 @@ pub fn generateMapTypeDef(wat: *WAT) !void {
 }
 
 /// Compiles map literal: {:a 1 :b 2} → (call $map.new ...)
-pub fn compileMapLiteral(wat: *WAT, entries: []const struct { key: Value, val: Value }) !void {
+pub fn compileMapLiteral(wat: *WAT, entries: anytype) !void {
     try wat.append("(call $map.new");
     for (entries) |entry| {
         try wat.append(" ");
@@ -356,7 +358,7 @@ pub fn generateSetTypeDef(wat: *WAT) !void {
 }
 
 /// Compiles set literal: #{1 2 3} → (call $set.new ...)
-pub fn compileSetLiteral(wat: *WAT, elements: []const Value) !void {
+pub fn compileSetLiteral(wat: *WAT, elements: anytype) !void {
     try wat.append("(call $set.new");
     for (elements) |elem| {
         try wat.append(" ");
@@ -459,7 +461,7 @@ pub fn generateListTypeDef(wat: *WAT) !void {
 }
 
 /// Compiles list literal: (list 1 2 3) → (call $list.new ...)
-pub fn compileListLiteral(wat: *WAT, elements: []const Value) !void {
+pub fn compileListLiteral(wat: *WAT, elements: anytype) !void {
     if (elements.len == 0) {
         try wat.append("(ref.null $List)");
         return;
@@ -862,7 +864,7 @@ fn generateVectorFillTail(wat: *WAT) !void {
 // Helper functions
 // ============================================================================
 
-fn compileValue(wat: *WAT, value: Value) !void {
+fn compileValue(wat: *WAT, value: anytype) !void {
     _ = wat;
     _ = value;
     // Stub: actual implementation delegates to compiler.zig

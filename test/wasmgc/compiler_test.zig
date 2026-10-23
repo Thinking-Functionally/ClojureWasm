@@ -11,7 +11,7 @@ const std = @import("std");
 const testing = std.testing;
 const compiler = @import("compiler");
 const runtime = @import("runtime");
-const types = @import("types");
+const value_types = @import("value_types");
 
 test "compile nil literal wrapped in def" {
     var literal = compiler.ASTNode{ .literal = .{ .value = .nil } };
