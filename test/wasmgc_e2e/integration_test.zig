@@ -20,25 +20,27 @@ const Allocator = std.mem.Allocator;
 pub const WasmExecutor = struct {
     allocator: Allocator,
     wasmtime_path: []const u8,
-    temp_dir: std.fs.Dir,
+    temp_dir_path: []const u8,
 
     pub fn init(allocator: Allocator) !WasmExecutor {
         // Find wasmtime executable
         const wasmtime_path = try findWasmtime(allocator);
 
         // Create temporary directory for .wat and .wasm files
-        const temp_dir = try std.fs.cwd().makeOpenPath(".zig-cache/wasmgc_test", .{});
+        const temp_dir_path = ".zig-cache/wasmgc_test";
+        std.fs.cwd().makeDir(temp_dir_path) catch |err| {
+            if (err != error.PathAlreadyExists) return err;
+        };
 
         return .{
             .allocator = allocator,
             .wasmtime_path = wasmtime_path,
-            .temp_dir = temp_dir,
+            .temp_dir_path = temp_dir_path,
         };
     }
 
     pub fn deinit(self: *WasmExecutor) void {
         self.allocator.free(self.wasmtime_path);
-        self.temp_dir.close();
     }
 
     fn findWasmtime(allocator: Allocator) ![]const u8 {
@@ -69,15 +71,22 @@ pub const WasmExecutor = struct {
     /// Compile WAT to WASM and execute with wasmtime
     pub fn execute(self: *WasmExecutor, wat_code: []const u8) !ExecutionResult {
         // Write WAT to temp file
-        const wat_file = try self.temp_dir.createFile("test.wat", .{});
+        const wat_path = try std.fmt.allocPrint(
+            self.allocator,
+            "{s}/test.wat",
+            .{self.temp_dir_path},
+        );
+        defer self.allocator.free(wat_path);
+
+        const wat_file = try std.fs.cwd().createFile(wat_path, .{});
         defer wat_file.close();
         try wat_file.writeAll(wat_code);
 
         // Convert WAT to WASM using wat2wasm (from WABT tools)
         const wasm_path = try std.fmt.allocPrint(
             self.allocator,
-            ".zig-cache/wasmgc_test/test.wasm",
-            .{},
+            "{s}/test.wasm",
+            .{self.temp_dir_path},
         );
         defer self.allocator.free(wasm_path);
 
@@ -85,7 +94,7 @@ pub const WasmExecutor = struct {
             .allocator = self.allocator,
             .argv = &[_][]const u8{
                 "wat2wasm",
-                ".zig-cache/wasmgc_test/test.wat",
+                wat_path,
                 "-o",
                 wasm_path,
             },
