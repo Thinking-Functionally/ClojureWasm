@@ -129,16 +129,16 @@ pub const WatTypeGen = struct {
     /// Spec: Emits $Value + $String + $Symbol + $Keyword + collection types
     /// Phase: Month 1 Week 3-4 (basic types only, collections in Month 2)
     pub fn emitAllTypes(self: *WatTypeGen) ![]const u8 {
-        var buf = try std.ArrayList(u8).initCapacity(self.arena, 1024);
+        var buf = try std.array_list.Managed(u8).initCapacity(self.arena, 1024);
 
-        try buf.appendSlice(self.arena, try self.emitValueType());
-        try buf.appendSlice(self.arena, "\n\n");
-        try buf.appendSlice(self.arena, try self.emitStringType());
-        try buf.appendSlice(self.arena, "\n\n");
-        try buf.appendSlice(self.arena, try self.emitSymbolType());
-        try buf.appendSlice(self.arena, "\n\n");
-        try buf.appendSlice(self.arena, try self.emitKeywordType());
+        try buf.appendSlice(try self.emitValueType());
+        try buf.appendSlice("\n\n");
+        try buf.appendSlice(try self.emitStringType());
+        try buf.appendSlice("\n\n");
+        try buf.appendSlice(try self.emitSymbolType());
+        try buf.appendSlice("\n\n");
+        try buf.appendSlice(try self.emitKeywordType());
 
-        return buf.toOwnedSlice(self.arena);
+        return buf.toOwnedSlice();
     }
 };

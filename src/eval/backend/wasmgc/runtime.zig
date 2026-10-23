@@ -16,8 +16,8 @@
 //! - Hash caching for immutable types (strings, symbols, keywords)
 
 const std = @import("std");
-const types = @import("types.zig");
-const codegen = @import("codegen.zig");
+const types = @import("types");
+const codegen = @import("codegen");
 const Allocator = std.mem.Allocator;
 
 /// Runtime function generator for WasmGC backend
@@ -35,7 +35,7 @@ pub const RuntimeGen = struct {
     /// Generate $rt_make_string function
     /// Creates a $Value wrapping a $String from UTF-8 byte array
     pub fn emitMakeString(self: *RuntimeGen) ![]const u8 {
-        var buf = std.ArrayList(u8).init(self.arena);
+        var buf = std.array_list.Managed(u8).init(self.arena);
 
         try buf.appendSlice(
             \\  (func $rt_make_string (param $bytes (array i8)) (result (ref $Value))
@@ -71,7 +71,7 @@ pub const RuntimeGen = struct {
     /// Generate $rt_make_symbol function
     /// Creates a $Value wrapping a $Symbol from namespace + name strings
     pub fn emitMakeSymbol(self: *RuntimeGen) ![]const u8 {
-        var buf = std.ArrayList(u8).init(self.arena);
+        var buf = std.array_list.Managed(u8).init(self.arena);
 
         try buf.appendSlice(
             \\  (func $rt_make_symbol (param $ns (ref null $String)) (param $name (ref $String)) (result (ref $Value))
@@ -129,7 +129,7 @@ pub const RuntimeGen = struct {
     /// Generate $rt_make_keyword function
     /// Creates a $Value wrapping a $Keyword from namespace + name strings
     pub fn emitMakeKeyword(self: *RuntimeGen) ![]const u8 {
-        var buf = std.ArrayList(u8).init(self.arena);
+        var buf = std.array_list.Managed(u8).init(self.arena);
 
         try buf.appendSlice(
             \\  (func $rt_make_keyword (param $ns (ref null $String)) (param $name (ref $String)) (result (ref $Value))
@@ -187,7 +187,7 @@ pub const RuntimeGen = struct {
     /// Generate $rt_is_truthy function
     /// Returns 1 for truthy (everything except nil and false), 0 for falsy
     pub fn emitIsTruthy(self: *RuntimeGen) ![]const u8 {
-        var buf = std.ArrayList(u8).init(self.arena);
+        var buf = std.array_list.Managed(u8).init(self.arena);
 
         try buf.appendSlice(
             \\  (func $rt_is_truthy (param $val (ref $Value)) (result i32)
@@ -586,7 +586,7 @@ pub const RuntimeGen = struct {
     /// Generate all runtime functions
     /// Emits all runtime support functions in one batch
     pub fn emitAllFunctions(self: *RuntimeGen) ![]const u8 {
-        var buf = std.ArrayList(u8).init(self.arena);
+        var buf = std.array_list.Managed(u8).init(self.arena);
 
         try buf.appendSlice( "\n  ;; Runtime support functions\n");
         try buf.appendSlice( try self.emitMakeString());

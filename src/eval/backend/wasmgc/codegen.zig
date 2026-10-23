@@ -17,8 +17,55 @@
 //! - WAT output is human-readable with consistent indentation
 
 const std = @import("std");
-const types = @import("types.zig");
+const types = @import("types");
 const Allocator = std.mem.Allocator;
+
+/// WAT text builder with indentation support
+pub const WAT = struct {
+    buffer: std.array_list.Managed(u8),
+    indent_level: u32,
+    allocator: Allocator,
+
+    pub fn init(allocator: Allocator) WAT {
+        return .{
+            .buffer = std.array_list.Managed(u8).init(allocator),
+            .indent_level = 0,
+            .allocator = allocator,
+        };
+    }
+
+    pub fn deinit(self: *WAT) void {
+        self.buffer.deinit();
+    }
+
+    pub fn indent(self: *WAT) void {
+        self.indent_level += 1;
+    }
+
+    pub fn dedent(self: *WAT) void {
+        if (self.indent_level > 0) {
+            self.indent_level -= 1;
+        }
+    }
+
+    pub fn appendLine(self: *WAT, text: []const u8) !void {
+        const spaces = self.indent_level * 2;
+        var i: u32 = 0;
+        while (i < spaces) : (i += 1) {
+            try self.buffer.append( ' ');
+        }
+        try self.buffer.appendSlice( text);
+        try self.buffer.append( '\n');
+    }
+
+    pub fn append(self: *WAT, text: []const u8) !void {
+        try self.buffer.appendSlice( text);
+    }
+
+    pub fn toString(self: *WAT) ![]const u8 {
+        return try self.allocator.dupe(u8, self.buffer.items);
+    }
+};
 
 /// Indentation level manager for WAT output
 pub const IndentContext = struct {
@@ -69,7 +116,7 @@ pub fn escapeWATIdentifier(allocator: Allocator, name: []const u8) ![]const u8 {
     }
 
     // Otherwise escape special characters
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
     try buf.append('$');
     for (name) |c| {
         if (std.ascii.isAlphanumeric(c) or c == '_') {
@@ -78,19 +125,19 @@ pub fn escapeWATIdentifier(allocator: Allocator, name: []const u8) ![]const u8 {
             try buf.append('_');
         }
     }
-    return buf.toOwnedSlice(allocator);
+    return buf.toOwnedSlice();
 }
 
 /// Format a struct.new instruction
 pub fn emitStructNew(allocator: Allocator, type_name: []const u8, fields: []const []const u8, indent: IndentContext) ![]const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
 
     const ind = try indent.spaces(allocator);
     defer allocator.free(ind);
 
-    try buf.appendSlice(allocator, ind);
-    try buf.appendSlice(allocator, "(struct.new ");
-    try buf.appendSlice(allocator, type_name);
+    try buf.appendSlice( ind);
+    try buf.appendSlice( "(struct.new ");
+    try buf.appendSlice( type_name);
 
     if (fields.len == 0) {
         try buf.append(')');
@@ -102,16 +149,16 @@ pub fn emitStructNew(allocator: Allocator, type_name: []const u8, fields: []cons
         defer allocator.free(field_ind);
 
         for (fields) |field| {
-            try buf.appendSlice(allocator, field_ind);
-            try buf.appendSlice(allocator, field);
+            try buf.appendSlice( field_ind);
+            try buf.appendSlice( field);
             try buf.append('\n');
         }
 
-        try buf.appendSlice(allocator, ind);
+        try buf.appendSlice( ind);
         try buf.append(')');
     }
 
-    return buf.toOwnedSlice(allocator);
+    return buf.toOwnedSlice();
 }
 
 /// Format a local.get instruction
@@ -136,109 +183,109 @@ pub fn emitGlobalSet(allocator: Allocator, var_name: []const u8, value_expr: []c
 
 /// Format a call instruction
 pub fn emitCall(allocator: Allocator, func_name: []const u8, args: []const []const u8) ![]const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
 
-    try buf.appendSlice(allocator, "(call $");
-    try buf.appendSlice(allocator, func_name);
+    try buf.appendSlice( "(call $");
+    try buf.appendSlice( func_name);
 
     for (args) |arg| {
         try buf.append(' ');
-        try buf.appendSlice(allocator, arg);
+        try buf.appendSlice( arg);
     }
 
     try buf.append(')');
-    return buf.toOwnedSlice(allocator);
+    return buf.toOwnedSlice();
 }
 
 /// Format an if expression
 pub fn emitIf(allocator: Allocator, test_expr: []const u8, then_expr: []const u8, else_expr: ?[]const u8, result_type: []const u8, indent: IndentContext) ![]const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
 
     const ind = try indent.spaces(allocator);
     defer allocator.free(ind);
 
-    try buf.appendSlice(allocator, ind);
-    try buf.appendSlice(allocator, "(if (result ");
-    try buf.appendSlice(allocator, result_type);
-    try buf.appendSlice(allocator, ")\n");
+    try buf.appendSlice( ind);
+    try buf.appendSlice( "(if (result ");
+    try buf.appendSlice( result_type);
+    try buf.appendSlice( ")\n");
 
     var inner_indent = indent;
     inner_indent.push();
     const inner_ind = try inner_indent.spaces(allocator);
     defer allocator.free(inner_ind);
 
-    try buf.appendSlice(allocator, inner_ind);
-    try buf.appendSlice(allocator, test_expr);
-    try buf.appendSlice(allocator, "\n");
+    try buf.appendSlice( inner_ind);
+    try buf.appendSlice( test_expr);
+    try buf.appendSlice( "\n");
 
-    try buf.appendSlice(allocator, inner_ind);
-    try buf.appendSlice(allocator, "(then\n");
+    try buf.appendSlice( inner_ind);
+    try buf.appendSlice( "(then\n");
 
     var body_indent = inner_indent;
     body_indent.push();
     const body_ind = try body_indent.spaces(allocator);
     defer allocator.free(body_ind);
 
-    try buf.appendSlice(allocator, body_ind);
-    try buf.appendSlice(allocator, then_expr);
-    try buf.appendSlice(allocator, ")\n");
+    try buf.appendSlice( body_ind);
+    try buf.appendSlice( then_expr);
+    try buf.appendSlice( ")\n");
 
-    try buf.appendSlice(allocator, inner_ind);
-    try buf.appendSlice(allocator, "(else\n");
+    try buf.appendSlice( inner_ind);
+    try buf.appendSlice( "(else\n");
 
-    try buf.appendSlice(allocator, body_ind);
+    try buf.appendSlice( body_ind);
     if (else_expr) |else_e| {
-        try buf.appendSlice(allocator, else_e);
+        try buf.appendSlice( else_e);
     } else {
-        try buf.appendSlice(allocator, "(ref.null $Value)");
+        try buf.appendSlice( "(ref.null $Value)");
     }
-    try buf.appendSlice(allocator, "))\n");
+    try buf.appendSlice( "))\n");
 
-    try buf.appendSlice(allocator, ind);
+    try buf.appendSlice( ind);
     try buf.append(')');
 
-    return buf.toOwnedSlice(allocator);
+    return buf.toOwnedSlice();
 }
 
 /// Format a block instruction
 pub fn emitBlock(allocator: Allocator, label: []const u8, result_type: []const u8, body: []const u8, indent: IndentContext) ![]const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
 
     const ind = try indent.spaces(allocator);
     defer allocator.free(ind);
 
-    try buf.appendSlice(allocator, ind);
-    try buf.appendSlice(allocator, "(block $");
-    try buf.appendSlice(allocator, label);
-    try buf.appendSlice(allocator, " (result ");
-    try buf.appendSlice(allocator, result_type);
-    try buf.appendSlice(allocator, ")\n");
+    try buf.appendSlice( ind);
+    try buf.appendSlice( "(block $");
+    try buf.appendSlice( label);
+    try buf.appendSlice( " (result ");
+    try buf.appendSlice( result_type);
+    try buf.appendSlice( ")\n");
 
     var body_indent = indent;
     body_indent.push();
     const body_ind = try body_indent.spaces(allocator);
     defer allocator.free(body_ind);
 
-    try buf.appendSlice(allocator, body_ind);
-    try buf.appendSlice(allocator, body);
+    try buf.appendSlice( body_ind);
+    try buf.appendSlice( body);
     try buf.append('\n');
 
-    try buf.appendSlice(allocator, ind);
+    try buf.appendSlice( ind);
     try buf.append(')');
 
-    return buf.toOwnedSlice(allocator);
+    return buf.toOwnedSlice();
 }
 
 /// Format a loop instruction
 pub fn emitLoop(allocator: Allocator, label: []const u8, body: []const u8, indent: IndentContext) ![]const u8 {
-    var buf = std.ArrayList(u8).init(allocator);
+    var buf = std.array_list.Managed(u8).init(allocator);
 
     const ind = try indent.spaces(allocator);
     defer allocator.free(ind);
 
-    try buf.appendSlice(allocator, ind);
-    try buf.appendSlice(allocator, "(loop $");
-    try buf.appendSlice(allocator, label);
+    try buf.appendSlice( ind);
+    try buf.appendSlice( "(loop $");
+    try buf.appendSlice( label);
     try buf.append('\n');
 
     var body_indent = indent;
@@ -246,14 +293,14 @@ pub fn emitLoop(allocator: Allocator, label: []const u8, body: []const u8, inden
     const body_ind = try body_indent.spaces(allocator);
     defer allocator.free(body_ind);
 
-    try buf.appendSlice(allocator, body_ind);
-    try buf.appendSlice(allocator, body);
+    try buf.appendSlice( body_ind);
+    try buf.appendSlice( body);
     try buf.append('\n');
 
-    try buf.appendSlice(allocator, ind);
+    try buf.appendSlice( ind);
     try buf.append(')');
 
-    return buf.toOwnedSlice(allocator);
+    return buf.toOwnedSlice();
 }
 
 /// Format a br (branch) instruction

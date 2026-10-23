@@ -18,28 +18,28 @@
 //! - Function-level compilation unit (each defn → one WAT func)
 
 const std = @import("std");
-const types = @import("types.zig");
+const types = @import("types");
 const Allocator = std.mem.Allocator;
 
 /// Compilation context for a single module
 pub const CompileContext = struct {
     allocator: Allocator,
     /// WAT output buffer
-    wat_output: std.ArrayList(u8),
+    wat_output: std.array_list.Managed(u8),
     /// Current function being compiled
     current_func: ?*FunctionContext,
     /// Global symbol table (for def'd vars)
     globals: std.StringHashMap(GlobalBinding),
     /// Function table for defn'd functions
-    functions: std.ArrayList(FunctionDef),
+    functions: std.array_list.Managed(FunctionDef),
 
     pub fn init(allocator: Allocator) CompileContext {
         return .{
             .allocator = allocator,
-            .wat_output = std.ArrayList(u8).init(allocator),
+            .wat_output = std.array_list.Managed(u8).init(allocator),
             .current_func = null,
             .globals = std.StringHashMap(GlobalBinding).init(allocator),
-            .functions = std.ArrayList(FunctionDef).init(allocator),
+            .functions = std.array_list.Managed(FunctionDef).init(allocator),
         };
     }
 
@@ -61,7 +61,7 @@ pub const FunctionContext = struct {
     /// Next available local index
     next_local_index: u32,
     /// Loop context stack (for recur target resolution)
-    loop_stack: std.ArrayList(LoopContext),
+    loop_stack: std.array_list.Managed(LoopContext),
 
     pub fn init(allocator: Allocator, name: []const u8, arity: u32) !FunctionContext {
         return .{
@@ -69,7 +69,7 @@ pub const FunctionContext = struct {
             .arity = arity,
             .locals = std.StringHashMap(LocalBinding).init(allocator),
             .next_local_index = arity, // params occupy first N locals
-            .loop_stack = std.ArrayList(LoopContext).init(allocator),
+            .loop_stack = std.array_list.Managed(LoopContext).init(allocator),
         };
     }
 
@@ -288,7 +288,7 @@ fn compileDefn(ctx: *CompileContext, fn_def: Defn) !void {
 }
 
 /// Compile an expression
-fn compileExpr(ctx: *CompileContext, node: ASTNode) !void {
+pub fn compileExpr(ctx: *CompileContext, node: ASTNode) error{OutOfMemory,InvalidExpression,UndefinedVariable,LetOutsideFunction,NotImplementedYet,LoopOutsideFunction,RecurOutsideFunction,RecurWithoutLoop,NoSpaceLeft,InvalidTopLevelForm}!void {
     switch (node) {
         .literal => |lit| try compileLiteral(ctx, lit),
         .var_ref => |v| try compileVarRef(ctx, v),

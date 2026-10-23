@@ -2,8 +2,8 @@
 
 const std = @import("std");
 const testing = std.testing;
-const collections = @import("collections");
 const codegen = @import("codegen");
+const collections = @import("collections");
 
 // ============================================================================
 // Vector Tests

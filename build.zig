@@ -225,21 +225,30 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    wasmgc_runtime_mod.addImport("types", wasmgc_types_mod);
     const wasmgc_compiler_mod = b.createModule(.{
         .root_source_file = b.path("src/eval/backend/wasmgc/compiler.zig"),
         .target = target,
         .optimize = optimize,
     });
+    wasmgc_compiler_mod.addImport("types", wasmgc_types_mod);
+
     const wasmgc_codegen_mod = b.createModule(.{
         .root_source_file = b.path("src/eval/backend/wasmgc/codegen.zig"),
         .target = target,
         .optimize = optimize,
     });
+    wasmgc_codegen_mod.addImport("types", wasmgc_types_mod);
+    wasmgc_runtime_mod.addImport("codegen", wasmgc_codegen_mod);
+
     const wasmgc_collections_mod = b.createModule(.{
         .root_source_file = b.path("src/eval/backend/wasmgc/collections.zig"),
         .target = target,
         .optimize = optimize,
     });
+    wasmgc_collections_mod.addImport("types", wasmgc_types_mod);
+    wasmgc_collections_mod.addImport("codegen", wasmgc_codegen_mod);
+    wasmgc_collections_mod.addImport("runtime", wasmgc_runtime_mod);
 
     const wasmgc_mod = b.createModule(.{
         .root_source_file = b.path("src/eval/backend/wasmgc.zig"),
@@ -259,8 +268,8 @@ pub fn build(b: *std.Build) void {
     wasmgc_compiler_test_mod.addImport("types", wasmgc_types_mod);
 
     // Collections test module imports
-    wasmgc_collections_test_mod.addImport("collections", wasmgc_collections_mod);
     wasmgc_collections_test_mod.addImport("codegen", wasmgc_codegen_mod);
+    wasmgc_collections_test_mod.addImport("collections", wasmgc_collections_mod);
     wasmgc_collections_test_mod.addImport("types", wasmgc_types_mod);
 
     // E2E test module imports
