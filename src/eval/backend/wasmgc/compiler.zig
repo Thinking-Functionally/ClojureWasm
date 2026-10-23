@@ -46,6 +46,14 @@ pub const CompileContext = struct {
     pub fn deinit(self: *CompileContext) void {
         self.wat_output.deinit();
         self.globals.deinit();
+
+        // Free each FunctionDef's allocated fields
+        for (self.functions.items) |func_def| {
+            self.allocator.free(func_def.name);
+            self.allocator.free(func_def.params);
+            self.allocator.free(func_def.body);
+            self.allocator.free(func_def.captures);
+        }
         self.functions.deinit();
     }
 };
@@ -83,6 +91,7 @@ pub const FunctionContext = struct {
 
     pub fn deinit(self: *FunctionContext) void {
         self.locals.deinit();
+        self.loop_stack.deinit(self.allocator);
         self.captures.deinit();
     }
 
@@ -665,6 +674,15 @@ fn compileLoop(ctx: *CompileContext, loop_expr: LoopExpr) !void {
         .arity = @intCast(loop_expr.bindings.len),
     });
     defer _ = func.loop_stack.pop();
+
+    // Add loop bindings to function locals
+    for (loop_expr.bindings) |binding| {
+        try func.locals.put(binding.name, .{
+            .index = func.next_local_index,
+            .wat_type = "(ref $Value)",
+        });
+        func.next_local_index += 1;
+    }
 
     try ctx.wat_output.appendSlice("(block $");
     try ctx.wat_output.appendSlice(loop_label);

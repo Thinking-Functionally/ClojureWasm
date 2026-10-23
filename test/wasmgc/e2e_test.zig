@@ -8,9 +8,8 @@ const ASTNode = compiler.ASTNode;
 const Binding = compiler.Binding;
 
 /// Helper to run shell command and capture output
-fn runCommand(allocator: std.mem.Allocator, argv: []const []const u8) !std.process.Child.RunResult {
-    const result = try std.process.Child.run(.{
-        .allocator = allocator,
+fn runCommand(allocator: std.mem.Allocator, argv: []const []const u8) !std.process.RunResult {
+    const result = try std.process.run(allocator, .{}, .{
         .argv = argv,
     });
     return result;

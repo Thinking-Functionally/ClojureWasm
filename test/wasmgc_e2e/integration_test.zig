@@ -14,26 +14,44 @@ const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 // ============================================================================
+// Helper: Create Io for subprocess execution in tests
+// ============================================================================
+
+fn createTestIo(allocator: Allocator) !std.Io.Threaded {
+    return std.Io.Threaded.init(allocator, .{
+        .environ = std.process.Environ.empty,
+    });
+}
+
+// ============================================================================
 // Task 1: WAT Execution Engine using wasmtime
 // ============================================================================
 
 pub const WasmExecutor = struct {
     allocator: Allocator,
+    io: *std.Io.Threaded,
     wasmtime_path: []const u8,
     temp_dir_path: []const u8,
 
-    pub fn init(allocator: Allocator) !WasmExecutor {
+    pub fn init(allocator: Allocator, io: *std.Io.Threaded) !WasmExecutor {
         // Find wasmtime executable
         const wasmtime_path = try findWasmtime(allocator);
 
         // Create temporary directory for .wat and .wasm files
         const temp_dir_path = ".zig-cache/wasmgc_test";
-        std.fs.cwd().makeDir(temp_dir_path) catch |err| {
-            if (err != error.PathAlreadyExists) return err;
-        };
+        // Create directory using mkdir -p
+        const mkdir_result = try std.process.run(allocator, io, .{
+            .argv = &.{ "mkdir", "-p", temp_dir_path },
+        });
+        if (mkdir_result.status != .exited or mkdir_result.status.exited != 0) {
+            return error.CannotCreateTempDir;
+        }
+        allocator.free(mkdir_result.stdout);
+        allocator.free(mkdir_result.stderr);
 
         return .{
             .allocator = allocator,
+            .io = io,
             .wasmtime_path = wasmtime_path,
             .temp_dir_path = temp_dir_path,
         };
@@ -51,15 +69,17 @@ pub const WasmExecutor = struct {
             "/opt/homebrew/bin/wasmtime",
         };
 
+        var io = try createTestIo(allocator);
+        defer io.deinit();
+
         for (locations) |path| {
-            const result = std.ChildProcess.run(.{
-                .allocator = allocator,
+            const result = std.process.run(allocator, io.io(), .{
                 .argv = &[_][]const u8{ "which", path },
             }) catch continue;
             defer allocator.free(result.stdout);
             defer allocator.free(result.stderr);
 
-            if (result.term.Exited == 0) {
+            if (result.term == .exited and result.term.exited == 0) {
                 return try allocator.dupe(u8, std.mem.trim(u8, result.stdout, &std.ascii.whitespace));
             }
         }
@@ -78,7 +98,7 @@ pub const WasmExecutor = struct {
         );
         defer self.allocator.free(wat_path);
 
-        const wat_file = try std.fs.cwd().createFile(wat_path, .{});
+        const wat_file = try std.Io.Dir.cwd().createFile(self.io, wat_path, .{});
         defer wat_file.close();
         try wat_file.writeAll(wat_code);
 
@@ -90,8 +110,7 @@ pub const WasmExecutor = struct {
         );
         defer self.allocator.free(wasm_path);
 
-        const wat2wasm_result = try std.ChildProcess.run(.{
-            .allocator = self.allocator,
+        const wat2wasm_result = try std.process.run(self.allocator, self.io, .{
             .argv = &[_][]const u8{
                 "wat2wasm",
                 wat_path,
@@ -102,7 +121,7 @@ pub const WasmExecutor = struct {
         defer self.allocator.free(wat2wasm_result.stdout);
         defer self.allocator.free(wat2wasm_result.stderr);
 
-        if (wat2wasm_result.term.Exited != 0) {
+        if (wat2wasm_result.term == .exited and wat2wasm_result.term.exited != 0) {
             std.debug.print("wat2wasm error: {s}\n", .{wat2wasm_result.stderr});
             return error.CompilationFailed;
         }
@@ -110,8 +129,7 @@ pub const WasmExecutor = struct {
         // Execute with wasmtime
         const start_time = std.time.nanoTimestamp();
 
-        const exec_result = try std.ChildProcess.run(.{
-            .allocator = self.allocator,
+        const exec_result = try std.process.run(self.allocator, self.io, .{
             .argv = &[_][]const u8{
                 self.wasmtime_path,
                 "--invoke=main",
@@ -125,7 +143,7 @@ pub const WasmExecutor = struct {
         return ExecutionResult{
             .stdout = exec_result.stdout,
             .stderr = exec_result.stderr,
-            .exit_code = exec_result.term.Exited,
+            .exit_code = if (exec_result.term == .exited) exec_result.term.exited else 1,
             .duration_ns = duration_ns,
         };
     }
@@ -149,12 +167,14 @@ pub const ExecutionResult = struct {
 
 pub const BackendComparison = struct {
     allocator: Allocator,
+    io: *std.Io.Threaded,
     wasm_executor: WasmExecutor,
 
-    pub fn init(allocator: Allocator) !BackendComparison {
+    pub fn init(allocator: Allocator, io: *std.Io.Threaded) !BackendComparison {
         return .{
             .allocator = allocator,
-            .wasm_executor = try WasmExecutor.init(allocator),
+            .io = io,
+            .wasm_executor = try WasmExecutor.init(allocator, io),
         };
     }
 
@@ -204,9 +224,12 @@ pub const BackendComparison = struct {
     }
 
     fn executeTreeWalk(self: *BackendComparison, expr: []const u8) ![]const u8 {
+        var io = try createTestIo(self.allocator);
+        defer io.deinit();
+
         // Call ClojureWasm CLI with TreeWalk backend
-        const result = try std.ChildProcess.run(.{
-            .allocator = self.allocator,
+        const result = try std.process.run(self.allocator, io.io(), .{
+            
             .argv = &[_][]const u8{
                 "zig",
                 "build",
@@ -219,7 +242,7 @@ pub const BackendComparison = struct {
         });
         defer self.allocator.free(result.stderr);
 
-        if (result.term.Exited != 0) {
+        if (result.term == .exited and result.term.exited != 0) {
             self.allocator.free(result.stdout);
             return error.TreeWalkFailed;
         }
@@ -228,9 +251,12 @@ pub const BackendComparison = struct {
     }
 
     fn executeVM(self: *BackendComparison, expr: []const u8) ![]const u8 {
+        var io = try createTestIo(self.allocator);
+        defer io.deinit();
+
         // Call ClojureWasm CLI with VM backend
-        const result = try std.ChildProcess.run(.{
-            .allocator = self.allocator,
+        const result = try std.process.run(self.allocator, io.io(), .{
+            
             .argv = &[_][]const u8{
                 "zig",
                 "build",
@@ -243,7 +269,7 @@ pub const BackendComparison = struct {
         });
         defer self.allocator.free(result.stderr);
 
-        if (result.term.Exited != 0) {
+        if (result.term == .exited and result.term.exited != 0) {
             self.allocator.free(result.stdout);
             return error.VMFailed;
         }
@@ -252,9 +278,12 @@ pub const BackendComparison = struct {
     }
 
     fn executeWasmGC(self: *BackendComparison, expr: []const u8) ![]const u8 {
+        var io = try createTestIo(self.allocator);
+        defer io.deinit();
+
         // Compile to WAT
-        const result = try std.ChildProcess.run(.{
-            .allocator = self.allocator,
+        const result = try std.process.run(self.allocator, io.io(), .{
+            
             .argv = &[_][]const u8{
                 "zig",
                 "build",
@@ -268,7 +297,7 @@ pub const BackendComparison = struct {
         });
         defer self.allocator.free(result.stderr);
 
-        if (result.term.Exited != 0) {
+        if (result.term == .exited and result.term.exited != 0) {
             self.allocator.free(result.stdout);
             return error.WasmGCCompileFailed;
         }
@@ -320,13 +349,15 @@ pub const ComparisonResult = struct {
 
 pub const BenchmarkSuite = struct {
     allocator: Allocator,
+    io: *std.Io.Threaded,
     comparison: BackendComparison,
     results: std.ArrayList(BenchmarkResult),
 
-    pub fn init(allocator: Allocator) !BenchmarkSuite {
+    pub fn init(allocator: Allocator, io: *std.Io.Threaded) !BenchmarkSuite {
         return .{
             .allocator = allocator,
-            .comparison = try BackendComparison.init(allocator),
+            .io = io,
+            .comparison = try BackendComparison.init(allocator, io),
             .results = std.ArrayList(BenchmarkResult).init(allocator),
         };
     }
@@ -643,12 +674,14 @@ pub const BrowserTesting = struct {
 
 pub const ExceptionTests = struct {
     allocator: Allocator,
+    io: *std.Io.Threaded,
     executor: WasmExecutor,
 
-    pub fn init(allocator: Allocator) !ExceptionTests {
+    pub fn init(allocator: Allocator, io: *std.Io.Threaded) !ExceptionTests {
         return .{
             .allocator = allocator,
-            .executor = try WasmExecutor.init(allocator),
+            .io = io,
+            .executor = try WasmExecutor.init(allocator, io),
         };
     }
 
@@ -786,9 +819,12 @@ pub const ExceptionTests = struct {
     }
 
     fn compileAndRun(self: *ExceptionTests, code: []const u8) !ExecutionResult {
+        var io = try createTestIo(self.allocator);
+        defer io.deinit();
+
         // Compile to WAT
-        const compile_result = try std.ChildProcess.run(.{
-            .allocator = self.allocator,
+        const compile_result = try std.process.run(self.allocator, io.io(), .{
+            
             .argv = &[_][]const u8{
                 "zig",
                 "build",
@@ -803,7 +839,7 @@ pub const ExceptionTests = struct {
         defer self.allocator.free(compile_result.stdout);
         defer self.allocator.free(compile_result.stderr);
 
-        if (compile_result.term.Exited != 0) {
+        if (compile_result.term == .exited and compile_result.term.exited != 0) {
             return error.CompilationFailed;
         }
 
@@ -926,9 +962,12 @@ pub const MetadataTests = struct {
     }
 
     fn compileAndInspect(self: *MetadataTests, code: []const u8) ![]const u8 {
+        var io = try createTestIo(self.allocator);
+        defer io.deinit();
+
         // Compile to WAT and inspect metadata sections
-        const result = try std.ChildProcess.run(.{
-            .allocator = self.allocator,
+        const result = try std.process.run(self.allocator, io.io(), .{
+            
             .argv = &[_][]const u8{
                 "zig",
                 "build",
@@ -943,7 +982,7 @@ pub const MetadataTests = struct {
         });
         defer self.allocator.free(result.stderr);
 
-        if (result.term.Exited != 0) {
+        if (result.term == .exited and result.term.exited != 0) {
             self.allocator.free(result.stdout);
             return error.CompilationFailed;
         }
@@ -958,6 +997,8 @@ pub const MetadataTests = struct {
 
 test "Run complete integration test suite" {
     const allocator = testing.allocator;
+    var io = try createTestIo(allocator);
+    defer io.deinit();
 
     std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
     std.debug.print("WasmGC Backend - Complete Integration Test Suite\n", .{});
@@ -966,7 +1007,7 @@ test "Run complete integration test suite" {
 
     // Task 1 & 2: Backend Comparison
     {
-        var comparison = try BackendComparison.init(allocator);
+        var comparison = try BackendComparison.init(allocator, &io);
         defer comparison.deinit();
 
         std.debug.print("\n--- Testing Backend Comparison ---\n", .{});
@@ -1009,7 +1050,7 @@ test "Run complete integration test suite" {
 
     // Task 5: Exception Handling
     {
-        var exception_tests = ExceptionTests.init(allocator) catch |err| {
+        var exception_tests = ExceptionTests.init(allocator, &io) catch |err| {
             std.debug.print("Skipping exception tests: {}\n", .{err});
             return;
         };
