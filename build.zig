@@ -180,6 +180,14 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // Compiler tests module
+    const wasmgc_compiler_test_mod = b.createModule(.{
+        .root_source_file = b.path("test/wasmgc/compiler_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Shared modules for WasmGC backend and tests
     const runtime_mod = b.createModule(.{
         .root_source_file = b.path("src/runtime/Runtime.zig"),
@@ -191,6 +199,24 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+
+    // Create modules for compiler components
+    const wasmgc_types_mod = b.createModule(.{
+        .root_source_file = b.path("src/eval/backend/wasmgc/types.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const wasmgc_runtime_mod = b.createModule(.{
+        .root_source_file = b.path("src/eval/backend/wasmgc/runtime.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const wasmgc_compiler_mod = b.createModule(.{
+        .root_source_file = b.path("src/eval/backend/wasmgc/compiler.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const wasmgc_mod = b.createModule(.{
         .root_source_file = b.path("src/eval/backend/wasmgc.zig"),
         .target = target,
@@ -202,9 +228,20 @@ pub fn build(b: *std.Build) void {
     wasmgc_test_mod.addImport("wasmgc", wasmgc_mod);
     wasmgc_test_mod.addImport("value_types", value_types_mod);
     wasmgc_test_mod.addImport("Runtime", runtime_mod);
+
+    // Compiler test module imports
+    wasmgc_compiler_test_mod.addImport("compiler", wasmgc_compiler_mod);
+    wasmgc_compiler_test_mod.addImport("runtime", wasmgc_runtime_mod);
+    wasmgc_compiler_test_mod.addImport("types", wasmgc_types_mod);
+
     const wasmgc_tests = b.addTest(.{ .root_module = wasmgc_test_mod });
     const run_wasmgc_tests = b.addRunArtifact(wasmgc_tests);
+
+    const wasmgc_compiler_tests = b.addTest(.{ .root_module = wasmgc_compiler_test_mod });
+    const run_wasmgc_compiler_tests = b.addRunArtifact(wasmgc_compiler_tests);
+
     test_step.dependOn(&run_wasmgc_tests.step);
+    test_step.dependOn(&run_wasmgc_compiler_tests.step);
 
     // `zig build lint` — zlinter rule chain (ADR-0003).
     // Runs where zlinter can be fetched from GitHub; the gate skips it on

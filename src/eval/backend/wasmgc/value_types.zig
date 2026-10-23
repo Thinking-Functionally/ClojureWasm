@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: EPL-2.0
 //! WasmGC Value Type Mapping
 //!
 //! Defines how Clojure types map to WasmGC native types (struct/array/ref).
@@ -130,14 +131,14 @@ pub const WatTypeGen = struct {
     pub fn emitAllTypes(self: *WatTypeGen) ![]const u8 {
         var buf = try std.ArrayList(u8).initCapacity(self.arena, 1024);
 
-        try buf.appendSlice(try self.emitValueType());
-        try buf.appendSlice("\n\n");
-        try buf.appendSlice(try self.emitStringType());
-        try buf.appendSlice("\n\n");
-        try buf.appendSlice(try self.emitSymbolType());
-        try buf.appendSlice("\n\n");
-        try buf.appendSlice(try self.emitKeywordType());
+        try buf.appendSlice(self.arena, try self.emitValueType());
+        try buf.appendSlice(self.arena, "\n\n");
+        try buf.appendSlice(self.arena, try self.emitStringType());
+        try buf.appendSlice(self.arena, "\n\n");
+        try buf.appendSlice(self.arena, try self.emitSymbolType());
+        try buf.appendSlice(self.arena, "\n\n");
+        try buf.appendSlice(self.arena, try self.emitKeywordType());
 
-        return buf.toOwnedSlice();
+        return buf.toOwnedSlice(self.arena);
     }
 };
