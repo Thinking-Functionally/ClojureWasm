@@ -1,0 +1,60 @@
+{
+  "defaultMode": "acceptEdits",
+  "outputStyle": "Japanese",
+  "model": "claude-opus-4-8",
+  "permissions": {
+    "allow": [
+      "Agent",
+      "Bash",
+      "Read",
+      "Edit",
+      "Write",
+      "Skill",
+      "ScheduleWakeup",
+      "ToolSearch",
+      "Monitor",
+      "WebFetch",
+      "WebSearch",
+      "AskUserQuestion",
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskList",
+      "TaskGet",
+      "TaskOutput",
+      "TaskStop",
+      "NotebookEdit",
+      "EnterPlanMode",
+      "ExitPlanMode",
+      "EnterWorktree",
+      "ExitWorktree",
+      "ListMcpResourcesTool",
+      "ReadMcpResourceTool",
+      "RemoteTrigger"
+    ],
+    "deny": [
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git reset --hard:*)",
+      "Bash(git commit --no-verify:*)",
+      "Bash(rm -rf /:*)",
+      "Bash(rm -rf ~/:*)",
+      "Bash(rm -rf $HOME:*)",
+      "Bash(rm -rf .git:*)"
+    ]
+  },
+  "env": {
+    "ZIG_LOCAL_CACHE_DIR": ".zig-cache"
+  },
+  "enabledPlugins": {
+    "figma@claude-plugins-official": false,
+    "slack@claude-plugins-official": false,
+    "notion@claude-plugins-official": false,
+    "chrome-devtools-mcp@claude-plugins-official": false,
+    "playwright@claude-plugins-official": false
+  },
+  "disabledMcpServers": [
+    "datadog-mcp"
+  ],
+  "hooks": {}
+}

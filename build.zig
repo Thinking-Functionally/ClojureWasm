@@ -188,6 +188,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Collections tests module (Month 2 Week 1-2)
+    const wasmgc_collections_test_mod = b.createModule(.{
+        .root_source_file = b.path("test/wasmgc/collections_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Shared modules for WasmGC backend and tests
     const runtime_mod = b.createModule(.{
         .root_source_file = b.path("src/runtime/Runtime.zig"),
@@ -216,6 +223,16 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const wasmgc_codegen_mod = b.createModule(.{
+        .root_source_file = b.path("src/eval/backend/wasmgc/codegen.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const wasmgc_collections_mod = b.createModule(.{
+        .root_source_file = b.path("src/eval/backend/wasmgc/collections.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
 
     const wasmgc_mod = b.createModule(.{
         .root_source_file = b.path("src/eval/backend/wasmgc.zig"),
@@ -234,14 +251,23 @@ pub fn build(b: *std.Build) void {
     wasmgc_compiler_test_mod.addImport("runtime", wasmgc_runtime_mod);
     wasmgc_compiler_test_mod.addImport("types", wasmgc_types_mod);
 
+    // Collections test module imports
+    wasmgc_collections_test_mod.addImport("collections", wasmgc_collections_mod);
+    wasmgc_collections_test_mod.addImport("codegen", wasmgc_codegen_mod);
+    wasmgc_collections_test_mod.addImport("types", wasmgc_types_mod);
+
     const wasmgc_tests = b.addTest(.{ .root_module = wasmgc_test_mod });
     const run_wasmgc_tests = b.addRunArtifact(wasmgc_tests);
 
     const wasmgc_compiler_tests = b.addTest(.{ .root_module = wasmgc_compiler_test_mod });
     const run_wasmgc_compiler_tests = b.addRunArtifact(wasmgc_compiler_tests);
 
+    const wasmgc_collections_tests = b.addTest(.{ .root_module = wasmgc_collections_test_mod });
+    const run_wasmgc_collections_tests = b.addRunArtifact(wasmgc_collections_tests);
+
     test_step.dependOn(&run_wasmgc_tests.step);
     test_step.dependOn(&run_wasmgc_compiler_tests.step);
+    test_step.dependOn(&run_wasmgc_collections_tests.step);
 
     // `zig build lint` — zlinter rule chain (ADR-0003).
     // Runs where zlinter can be fetched from GitHub; the gate skips it on
