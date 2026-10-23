@@ -195,6 +195,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // E2E tests module (Month 2 Week 3-4)
+    const wasmgc_e2e_test_mod = b.createModule(.{
+        .root_source_file = b.path("test/wasmgc/e2e_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Shared modules for WasmGC backend and tests
     const runtime_mod = b.createModule(.{
         .root_source_file = b.path("src/runtime/Runtime.zig"),
@@ -256,6 +263,10 @@ pub fn build(b: *std.Build) void {
     wasmgc_collections_test_mod.addImport("codegen", wasmgc_codegen_mod);
     wasmgc_collections_test_mod.addImport("types", wasmgc_types_mod);
 
+    // E2E test module imports
+    wasmgc_e2e_test_mod.addImport("compiler", wasmgc_compiler_mod);
+    wasmgc_e2e_test_mod.addImport("types", wasmgc_types_mod);
+
     const wasmgc_tests = b.addTest(.{ .root_module = wasmgc_test_mod });
     const run_wasmgc_tests = b.addRunArtifact(wasmgc_tests);
 
@@ -265,9 +276,13 @@ pub fn build(b: *std.Build) void {
     const wasmgc_collections_tests = b.addTest(.{ .root_module = wasmgc_collections_test_mod });
     const run_wasmgc_collections_tests = b.addRunArtifact(wasmgc_collections_tests);
 
+    const wasmgc_e2e_tests = b.addTest(.{ .root_module = wasmgc_e2e_test_mod });
+    const run_wasmgc_e2e_tests = b.addRunArtifact(wasmgc_e2e_tests);
+
     test_step.dependOn(&run_wasmgc_tests.step);
     test_step.dependOn(&run_wasmgc_compiler_tests.step);
     test_step.dependOn(&run_wasmgc_collections_tests.step);
+    test_step.dependOn(&run_wasmgc_e2e_tests.step);
 
     // `zig build lint` — zlinter rule chain (ADR-0003).
     // Runs where zlinter can be fetched from GitHub; the gate skips it on
