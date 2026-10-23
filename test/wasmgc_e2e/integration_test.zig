@@ -52,7 +52,7 @@ pub const WasmExecutor = struct {
         };
 
         for (locations) |path| {
-            const result = std.ChildProcess.exec(.{
+            const result = std.ChildProcess.run(.{
                 .allocator = allocator,
                 .argv = &[_][]const u8{ "which", path },
             }) catch continue;
@@ -90,7 +90,7 @@ pub const WasmExecutor = struct {
         );
         defer self.allocator.free(wasm_path);
 
-        const wat2wasm_result = try std.ChildProcess.exec(.{
+        const wat2wasm_result = try std.ChildProcess.run(.{
             .allocator = self.allocator,
             .argv = &[_][]const u8{
                 "wat2wasm",
@@ -110,7 +110,7 @@ pub const WasmExecutor = struct {
         // Execute with wasmtime
         const start_time = std.time.nanoTimestamp();
 
-        const exec_result = try std.ChildProcess.exec(.{
+        const exec_result = try std.ChildProcess.run(.{
             .allocator = self.allocator,
             .argv = &[_][]const u8{
                 self.wasmtime_path,
@@ -205,7 +205,7 @@ pub const BackendComparison = struct {
 
     fn executeTreeWalk(self: *BackendComparison, expr: []const u8) ![]const u8 {
         // Call ClojureWasm CLI with TreeWalk backend
-        const result = try std.ChildProcess.exec(.{
+        const result = try std.ChildProcess.run(.{
             .allocator = self.allocator,
             .argv = &[_][]const u8{
                 "zig",
@@ -229,7 +229,7 @@ pub const BackendComparison = struct {
 
     fn executeVM(self: *BackendComparison, expr: []const u8) ![]const u8 {
         // Call ClojureWasm CLI with VM backend
-        const result = try std.ChildProcess.exec(.{
+        const result = try std.ChildProcess.run(.{
             .allocator = self.allocator,
             .argv = &[_][]const u8{
                 "zig",
@@ -253,7 +253,7 @@ pub const BackendComparison = struct {
 
     fn executeWasmGC(self: *BackendComparison, expr: []const u8) ![]const u8 {
         // Compile to WAT
-        const result = try std.ChildProcess.exec(.{
+        const result = try std.ChildProcess.run(.{
             .allocator = self.allocator,
             .argv = &[_][]const u8{
                 "zig",
@@ -787,7 +787,7 @@ pub const ExceptionTests = struct {
 
     fn compileAndRun(self: *ExceptionTests, code: []const u8) !ExecutionResult {
         // Compile to WAT
-        const compile_result = try std.ChildProcess.exec(.{
+        const compile_result = try std.ChildProcess.run(.{
             .allocator = self.allocator,
             .argv = &[_][]const u8{
                 "zig",
@@ -927,7 +927,7 @@ pub const MetadataTests = struct {
 
     fn compileAndInspect(self: *MetadataTests, code: []const u8) ![]const u8 {
         // Compile to WAT and inspect metadata sections
-        const result = try std.ChildProcess.exec(.{
+        const result = try std.ChildProcess.run(.{
             .allocator = self.allocator,
             .argv = &[_][]const u8{
                 "zig",

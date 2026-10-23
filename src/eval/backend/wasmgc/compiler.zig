@@ -619,7 +619,7 @@ fn compileFn(ctx: *CompileContext, fn_expr: FnExpr) !void {
     ctx.wat_output = saved_output;
 
     // Register the function
-    try ctx.functions.append(ctx.allocator, .{
+    try ctx.functions.append(.{
         .name = try ctx.allocator.dupe(u8, func_name),
         .arity = @intCast(fn_expr.params.len),
         .params = try ctx.allocator.dupe([]const u8, fn_expr.params),
