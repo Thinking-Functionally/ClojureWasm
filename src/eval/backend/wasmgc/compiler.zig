@@ -459,18 +459,36 @@ fn compileLiteral(ctx: *CompileContext, lit: Literal) !void {
 
 /// Compile a variable reference
 fn compileVarRef(ctx: *CompileContext, v: VarRef) !void {
-    // Check local bindings first
+    // Check function context (locals and captures)
     if (ctx.current_func) |func| {
-        if (func.locals.get(v.name)) |local| {
-            try ctx.wat_output.appendSlice("(local.get $");
-            try ctx.wat_output.appendSlice(v.name);
-            try ctx.wat_output.appendSlice(")");
-            _ = local;
-            return;
+        if (func.lookupVar(v.name)) |loc| {
+            switch (loc) {
+                .local => {
+                    try ctx.wat_output.appendSlice("(local.get $");
+                    try ctx.wat_output.appendSlice(v.name);
+                    try ctx.wat_output.appendSlice(")");
+                    return;
+                },
+                .capture => |cap| {
+                    // Access from closure's capture array
+                    try ctx.wat_output.appendSlice("(array.get $CaptureArray (local.get $__captures) (i32.const ");
+                    var buf: [16]u8 = undefined;
+                    const idx_str = try std.fmt.bufPrint(&buf, "{d}", .{cap.capture_index});
+                    try ctx.wat_output.appendSlice(idx_str);
+                    try ctx.wat_output.appendSlice("))");
+                    return;
+                },
+                .global => {
+                    try ctx.wat_output.appendSlice("(global.get $");
+                    try ctx.wat_output.appendSlice(v.name);
+                    try ctx.wat_output.appendSlice(")");
+                    return;
+                },
+            }
         }
     }
 
-    // Check globals
+    // Check globals if not in function context
     if (ctx.globals.get(v.name)) |_| {
         try ctx.wat_output.appendSlice("(global.get $");
         try ctx.wat_output.appendSlice(v.name);
@@ -570,41 +588,114 @@ fn compileDo(ctx: *CompileContext, do_expr: DoExpr) !void {
     try ctx.wat_output.appendSlice(")");
 }
 
+/// Analyze free variables in expressions for closure capture
+fn analyzeFreeVars(ctx: *CompileContext, body: []const ASTNode, func_ctx: *FunctionContext, parent: *FunctionContext) !void {
+    for (body) |expr| {
+        try analyzeFreeVarsExpr(ctx, expr, func_ctx, parent);
+    }
+}
+
+fn analyzeFreeVarsExpr(ctx: *CompileContext, expr: ASTNode, func_ctx: *FunctionContext, parent: *FunctionContext) !void {
+    switch (expr) {
+        .var_ref => |v| {
+            // If this variable is not in the current function's locals
+            if (func_ctx.locals.get(v.name) == null) {
+                // Check if it's in parent scope
+                if (parent.lookupVar(v.name)) |loc| {
+                    switch (loc) {
+                        .local => |local| {
+                            // This is a free variable - capture it
+                            if (func_ctx.captures.get(v.name) == null) {
+                                try func_ctx.captures.put(v.name, .{
+                                    .name = v.name,
+                                    .capture_index = @intCast(func_ctx.captures.count()),
+                                    .wat_type = local.wat_type,
+                                });
+                            }
+                        },
+                        .capture => |cap| {
+                            // Parent already captured it, we need it too
+                            if (func_ctx.captures.get(v.name) == null) {
+                                try func_ctx.captures.put(v.name, cap);
+                            }
+                        },
+                        .global => {},
+                    }
+                }
+            }
+        },
+        .let_expr => |let_expr| {
+            // Analyze binding initializers
+            for (let_expr.bindings) |binding| {
+                try analyzeFreeVarsExpr(ctx, binding.init.*, func_ctx, parent);
+            }
+            // Analyze body
+            for (let_expr.body) |body_expr| {
+                try analyzeFreeVarsExpr(ctx, body_expr, func_ctx, parent);
+            }
+        },
+        .fn_expr => |fn_expr| {
+            // Nested closures - analyze their body
+            for (fn_expr.body) |body_expr| {
+                try analyzeFreeVarsExpr(ctx, body_expr, func_ctx, parent);
+            }
+        },
+        .fn_call => |call| {
+            try analyzeFreeVarsExpr(ctx, call.func.*, func_ctx, parent);
+            for (call.args) |arg| {
+                try analyzeFreeVarsExpr(ctx, arg, func_ctx, parent);
+            }
+        },
+        .if_expr => |if_expr| {
+            try analyzeFreeVarsExpr(ctx, if_expr.test_expr.*, func_ctx, parent);
+            try analyzeFreeVarsExpr(ctx, if_expr.then_expr.*, func_ctx, parent);
+            if (if_expr.else_expr) |else_expr| {
+                try analyzeFreeVarsExpr(ctx, else_expr.*, func_ctx, parent);
+            }
+        },
+        .do_expr => |do_expr| {
+            for (do_expr.exprs) |body_expr| {
+                try analyzeFreeVarsExpr(ctx, body_expr, func_ctx, parent);
+            }
+        },
+        .loop_expr => |loop_expr| {
+            for (loop_expr.bindings) |binding| {
+                try analyzeFreeVarsExpr(ctx, binding.init.*, func_ctx, parent);
+            }
+            for (loop_expr.body) |body_expr| {
+                try analyzeFreeVarsExpr(ctx, body_expr, func_ctx, parent);
+            }
+        },
+        .recur => |recur| {
+            for (recur.args) |arg| {
+                try analyzeFreeVarsExpr(ctx, arg, func_ctx, parent);
+            }
+        },
+        else => {},
+    }
+}
+
 /// Compile a fn expression (lambda)
 fn compileFn(ctx: *CompileContext, fn_expr: FnExpr) !void {
     // Generate unique function name
     var func_name_buf: [64]u8 = undefined;
-    const func_name = try std.fmt.bufPrint(&func_name_buf, "fn_{d}", .{ctx.functions.items.len});
+    const func_name = try std.fmt.bufPrint(&func_name_buf, "lambda_{d}", .{ctx.functions.items.len});
 
     // Create function context
     var func_ctx = try FunctionContext.init(ctx.allocator, func_name, @intCast(fn_expr.params.len), ctx.current_func);
     defer func_ctx.deinit();
 
-    // Analyze captures from parent scope
-    if (ctx.current_func) |parent| {
-        for (fn_expr.params) |param_name| {
-            if (parent.lookupVar(param_name)) |loc| {
-                switch (loc) {
-                    .local => |local| {
-                        try func_ctx.captures.put(param_name, .{
-                            .name = param_name,
-                            .capture_index = @intCast(func_ctx.captures.count()),
-                            .wat_type = local.wat_type,
-                        });
-                    },
-                    .capture => {},
-                    .global => {},
-                }
-            }
-        }
-    }
-
-    // Register parameters as locals
+    // Register parameters as locals first
     for (fn_expr.params, 0..) |param_name, i| {
         try func_ctx.locals.put(param_name, .{
             .index = @intCast(i),
             .wat_type = "(ref $Value)",
         });
+    }
+
+    // Analyze captures from parent scope by scanning body for free variables
+    if (ctx.current_func) |parent| {
+        try analyzeFreeVars(ctx, fn_expr.body, &func_ctx, parent);
     }
 
     // Compile function body to temporary buffer
@@ -638,11 +729,11 @@ fn compileFn(ctx: *CompileContext, fn_expr: FnExpr) !void {
 
     // Emit closure construction (struct.new $Function)
     try ctx.wat_output.appendSlice("(struct.new $Function\n");
-    try ctx.wat_output.appendSlice("      (ref.func $");
-    try ctx.wat_output.appendSlice(func_name);
-    try ctx.wat_output.appendSlice(")\n");
 
-    // Capture array
+    // Field 1: func_index (i32) - for now use placeholder 0
+    try ctx.wat_output.appendSlice("      (i32.const 0)\n");
+
+    // Field 2: captures array
     if (func_ctx.captures.count() > 0) {
         try ctx.wat_output.appendSlice("      (array.new_fixed $CaptureArray ");
         var buf: [16]u8 = undefined;
@@ -655,10 +746,17 @@ fn compileFn(ctx: *CompileContext, fn_expr: FnExpr) !void {
             try ctx.wat_output.appendSlice(entry.key_ptr.*);
             try ctx.wat_output.appendSlice(")");
         }
-        try ctx.wat_output.appendSlice(")");
+        try ctx.wat_output.appendSlice(")\n");
     } else {
-        try ctx.wat_output.appendSlice("      (ref.null $CaptureArray)");
+        try ctx.wat_output.appendSlice("      (ref.null $CaptureArray)\n");
     }
+
+    // Field 3: arity (i32)
+    var arity_buf: [16]u8 = undefined;
+    const arity_str = try std.fmt.bufPrint(&arity_buf, "{d}", .{fn_expr.params.len});
+    try ctx.wat_output.appendSlice("      (i32.const ");
+    try ctx.wat_output.appendSlice(arity_str);
+    try ctx.wat_output.appendSlice(")");
 
     try ctx.wat_output.appendSlice(")");
 }
