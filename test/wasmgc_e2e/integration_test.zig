@@ -40,10 +40,10 @@ pub const WasmExecutor = struct {
         // Create temporary directory for .wat and .wasm files
         const temp_dir_path = ".zig-cache/wasmgc_test";
         // Create directory using mkdir -p
-        const mkdir_result = try std.process.run(allocator, io, .{
+        const mkdir_result = try std.process.run(allocator, io.io(), .{
             .argv = &.{ "mkdir", "-p", temp_dir_path },
         });
-        if (mkdir_result.status != .exited or mkdir_result.status.exited != 0) {
+        if (mkdir_result.term != .exited or mkdir_result.term.exited != 0) {
             return error.CannotCreateTempDir;
         }
         allocator.free(mkdir_result.stdout);
@@ -98,9 +98,9 @@ pub const WasmExecutor = struct {
         );
         defer self.allocator.free(wat_path);
 
-        const wat_file = try std.Io.Dir.cwd().createFile(self.io, wat_path, .{});
-        defer wat_file.close();
-        try wat_file.writeAll(wat_code);
+        const wat_file = try std.Io.Dir.cwd().createFile(self.io.io(), wat_path, .{});
+        defer wat_file.close(self.io.io());
+        try wat_file.writeStreamingAll(self.io.io(), wat_code);
 
         // Convert WAT to WASM using wat2wasm (from WABT tools)
         const wasm_path = try std.fmt.allocPrint(
@@ -110,7 +110,7 @@ pub const WasmExecutor = struct {
         );
         defer self.allocator.free(wasm_path);
 
-        const wat2wasm_result = try std.process.run(self.allocator, self.io, .{
+        const wat2wasm_result = try std.process.run(self.allocator, self.io.io(), .{
             .argv = &[_][]const u8{
                 "wat2wasm",
                 wat_path,
@@ -127,9 +127,9 @@ pub const WasmExecutor = struct {
         }
 
         // Execute with wasmtime
-        const start_time = std.time.nanoTimestamp();
+        const start_time = std.Io.Timestamp.now(self.io.io(), .awake);
 
-        const exec_result = try std.process.run(self.allocator, self.io, .{
+        const exec_result = try std.process.run(self.allocator, self.io.io(), .{
             .argv = &[_][]const u8{
                 self.wasmtime_path,
                 "--invoke=main",
@@ -137,8 +137,8 @@ pub const WasmExecutor = struct {
             },
         });
 
-        const end_time = std.time.nanoTimestamp();
-        const duration_ns = @as(u64, @intCast(end_time - start_time));
+        const end_time = std.Io.Timestamp.now(self.io.io(), .awake);
+        const duration_ns = @as(u64, @intCast(end_time.nanoseconds - start_time.nanoseconds));
 
         return ExecutionResult{
             .stdout = exec_result.stdout,
@@ -199,22 +199,22 @@ pub const BackendComparison = struct {
         };
 
         // Execute with TreeWalk backend
-        const tw_start = std.time.nanoTimestamp();
+        const tw_start = std.Io.Timestamp.now(self.io.io(), .awake);
         result.treewalk_output = try self.executeTreeWalk(clojure_expr);
-        const tw_end = std.time.nanoTimestamp();
-        result.treewalk_time_ns = @intCast(tw_end - tw_start);
+        const tw_end = std.Io.Timestamp.now(self.io.io(), .awake);
+        result.treewalk_time_ns = @intCast(tw_end.nanoseconds - tw_start.nanoseconds);
 
         // Execute with VM backend
-        const vm_start = std.time.nanoTimestamp();
+        const vm_start = std.Io.Timestamp.now(self.io.io(), .awake);
         result.vm_output = try self.executeVM(clojure_expr);
-        const vm_end = std.time.nanoTimestamp();
-        result.vm_time_ns = @intCast(vm_end - vm_start);
+        const vm_end = std.Io.Timestamp.now(self.io.io(), .awake);
+        result.vm_time_ns = @intCast(vm_end.nanoseconds - vm_start.nanoseconds);
 
         // Execute with WasmGC backend
-        const wg_start = std.time.nanoTimestamp();
+        const wg_start = std.Io.Timestamp.now(self.io.io(), .awake);
         result.wasmgc_output = try self.executeWasmGC(clojure_expr);
-        const wg_end = std.time.nanoTimestamp();
-        result.wasmgc_time_ns = @intCast(wg_end - wg_start);
+        const wg_end = std.Io.Timestamp.now(self.io.io(), .awake);
+        result.wasmgc_time_ns = @intCast(wg_end.nanoseconds - wg_start.nanoseconds);
 
         // Compare outputs
         result.all_match = std.mem.eql(u8, result.treewalk_output, result.vm_output) and
@@ -358,7 +358,7 @@ pub const BenchmarkSuite = struct {
             .allocator = allocator,
             .io = io,
             .comparison = try BackendComparison.init(allocator, io),
-            .results = std.ArrayList(BenchmarkResult).init(allocator),
+            .results = std.ArrayList(BenchmarkResult).initCapacity(allocator, 0) catch unreachable,
         };
     }
 
@@ -366,7 +366,7 @@ pub const BenchmarkSuite = struct {
         for (self.results.items) |result| {
             result.deinit(self.allocator);
         }
-        self.results.deinit();
+        self.results.deinit(self.allocator);
         self.comparison.deinit();
     }
 
@@ -421,7 +421,7 @@ pub const BenchmarkSuite = struct {
 
         comp_result.print();
 
-        try self.results.append(BenchmarkResult{
+        try self.results.append(self.allocator, BenchmarkResult{
             .name = try self.allocator.dupe(u8, name),
             .treewalk_ns = comp_result.treewalk_time_ns,
             .vm_ns = comp_result.vm_time_ns,
@@ -483,10 +483,10 @@ pub const BrowserTesting = struct {
     allocator: Allocator,
     test_html_path: []const u8,
 
-    pub fn init(allocator: Allocator) !BrowserTesting {
+    pub fn init(allocator: Allocator, io: *std.Io.Threaded) !BrowserTesting {
         // Create test HTML file
         const html_path = "test/wasmgc_e2e/browser_test.html";
-        try createBrowserTestHTML(html_path);
+        try createBrowserTestHTML(io, html_path);
 
         return .{
             .allocator = allocator,
@@ -494,7 +494,7 @@ pub const BrowserTesting = struct {
         };
     }
 
-    fn createBrowserTestHTML(path: []const u8) !void {
+    fn createBrowserTestHTML(io: *std.Io.Threaded, path: []const u8) !void {
         const html_content =
             \\<!DOCTYPE html>
             \\<html>
@@ -651,9 +651,9 @@ pub const BrowserTesting = struct {
             \\</html>
         ;
 
-        const file = try std.fs.cwd().createFile(path, .{});
-        defer file.close();
-        try file.writeAll(html_content);
+        const file = try std.Io.Dir.cwd().createFile(io.io(), path, .{});
+        defer file.close(io.io());
+        try file.writeStreamingAll(io.io(), html_content);
     }
 
     pub fn runBrowserTests(self: *BrowserTesting) !void {
@@ -1030,7 +1030,7 @@ test "Run complete integration test suite" {
 
     // Task 3: Performance Benchmarks
     {
-        var benchmark = BenchmarkSuite.init(allocator) catch |err| {
+        var benchmark = BenchmarkSuite.init(allocator, &io) catch |err| {
             std.debug.print("Skipping benchmarks: {}\n", .{err});
             return;
         };
@@ -1044,7 +1044,7 @@ test "Run complete integration test suite" {
 
     // Task 4: Browser Testing
     {
-        const browser = try BrowserTesting.init(allocator);
+        var browser = try BrowserTesting.init(allocator, &io);
         try browser.runBrowserTests();
     }
 
