@@ -1045,7 +1045,7 @@ test "Run complete integration test suite" {
     // Task 4: Browser Testing
     {
         var browser = try BrowserTesting.init(allocator, &io);
-        try browser.runBrowserTests();
+        try (&browser).runBrowserTests();
     }
 
     // Task 5: Exception Handling
