@@ -27,10 +27,11 @@
 
 const std = @import("std");
 const Runtime = @import("Runtime");
-const Env = @import("Env");
-const Value = @import("Value");
-const AST = @import("AST");
-const Node = AST.Node;
+
+// wasmgc module is a backend — it takes AST Nodes as input.
+// It should not orchestrate the Reader/Analyzer pipeline; that's the caller's job.
+// For now, stub out Node as an empty type until we wire up the real AST module.
+const Node = struct {};
 
 /// Compiler instance for WasmGC backend.
 pub const Compiler = struct {
@@ -47,35 +48,10 @@ pub const Compiler = struct {
 
     /// Compile AST node to WAT string.
     /// Spec: Takes already-expanded AST from Analyzer and emits WAT text.
-    /// Phase: Month 1 Week 3-4 (basic expressions only)
+    /// Phase: Incremental TDD - implementing features one by one
     pub fn compile(self: *Compiler, node: *const Node) ![]const u8 {
         _ = self;
         _ = node;
         return error.NotImplemented;
     }
 };
-
-/// Entry point: Compile Clojure source to .wasm module.
-///
-/// Usage:
-///   cljw wasmgc -i core.clj -o core.wasm
-///
-/// Pipeline:
-///   1. Reader parses source → Forms
-///   2. Analyzer expands macros + analyzes → AST
-///   3. WasmGC Compiler generates → WAT text
-///   4. wasm-tools (external) converts WAT → .wasm binary
-///
-/// Spec: This function orchestrates steps 1-3; step 4 is external tooling.
-pub fn compileToWasm(
-    arena: std.mem.Allocator,
-    rt: *Runtime,
-    source: []const u8,
-    output_path: []const u8,
-) !void {
-    _ = arena;
-    _ = rt;
-    _ = source;
-    _ = output_path;
-    return error.NotImplemented;
-}
