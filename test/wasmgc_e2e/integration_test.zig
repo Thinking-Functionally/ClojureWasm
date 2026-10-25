@@ -17,10 +17,8 @@ const Allocator = std.mem.Allocator;
 // Helper: Create Io for subprocess execution in tests
 // ============================================================================
 
-fn createTestIo(allocator: Allocator) !std.Io.Threaded {
-    return std.Io.Threaded.init(allocator, .{
-        .environ = std.process.Environ.empty,
-    });
+fn createTestIo(allocator: Allocator) std.Io.Threaded {
+    return std.Io.Threaded.init(allocator, .{});
 }
 
 // ============================================================================
@@ -39,15 +37,11 @@ pub const WasmExecutor = struct {
 
         // Create temporary directory for .wat and .wasm files
         const temp_dir_path = ".zig-cache/wasmgc_test";
-        // Create directory using mkdir -p
-        const mkdir_result = try std.process.run(allocator, io.io(), .{
-            .argv = &.{ "mkdir", "-p", temp_dir_path },
-        });
-        if (mkdir_result.term != .exited or mkdir_result.term.exited != 0) {
-            return error.CannotCreateTempDir;
-        }
-        allocator.free(mkdir_result.stdout);
-        allocator.free(mkdir_result.stderr);
+        // Create directory using std.fs
+        std.Io.Dir.cwd().createDirPath(io.io(), temp_dir_path) catch |err| switch (err) {
+            error.PathAlreadyExists => {}, // OK if already exists
+            else => return error.CannotCreateTempDir,
+        };
 
         return .{
             .allocator = allocator,
@@ -69,7 +63,10 @@ pub const WasmExecutor = struct {
             "/opt/homebrew/bin/wasmtime",
         };
 
-        var io = try createTestIo(allocator);
+        // Create IO with global environment so subprocess commands work
+        var io = std.Io.Threaded.init(allocator, .{
+            .environ = .{ .block = .{ .slice = std.mem.span(std.c.environ) } },
+        });
         defer io.deinit();
 
         for (locations) |path| {
@@ -224,12 +221,14 @@ pub const BackendComparison = struct {
     }
 
     fn executeTreeWalk(self: *BackendComparison, expr: []const u8) ![]const u8 {
-        var io = try createTestIo(self.allocator);
+        var io = std.Io.Threaded.init(self.allocator, .{
+            .environ = .{ .block = .{ .slice = std.mem.span(std.c.environ) } },
+        });
         defer io.deinit();
 
         // Call ClojureWasm CLI with TreeWalk backend
         const result = try std.process.run(self.allocator, io.io(), .{
-            
+
             .argv = &[_][]const u8{
                 "zig",
                 "build",
@@ -251,12 +250,14 @@ pub const BackendComparison = struct {
     }
 
     fn executeVM(self: *BackendComparison, expr: []const u8) ![]const u8 {
-        var io = try createTestIo(self.allocator);
+        var io = std.Io.Threaded.init(self.allocator, .{
+            .environ = .{ .block = .{ .slice = std.mem.span(std.c.environ) } },
+        });
         defer io.deinit();
 
         // Call ClojureWasm CLI with VM backend
         const result = try std.process.run(self.allocator, io.io(), .{
-            
+
             .argv = &[_][]const u8{
                 "zig",
                 "build",
@@ -278,12 +279,14 @@ pub const BackendComparison = struct {
     }
 
     fn executeWasmGC(self: *BackendComparison, expr: []const u8) ![]const u8 {
-        var io = try createTestIo(self.allocator);
+        var io = std.Io.Threaded.init(self.allocator, .{
+            .environ = .{ .block = .{ .slice = std.mem.span(std.c.environ) } },
+        });
         defer io.deinit();
 
         // Compile to WAT
         const result = try std.process.run(self.allocator, io.io(), .{
-            
+
             .argv = &[_][]const u8{
                 "zig",
                 "build",
@@ -819,7 +822,9 @@ pub const ExceptionTests = struct {
     }
 
     fn compileAndRun(self: *ExceptionTests, code: []const u8) !ExecutionResult {
-        var io = try createTestIo(self.allocator);
+        var io = std.Io.Threaded.init(self.allocator, .{
+            .environ = .{ .block = .{ .slice = std.mem.span(std.c.environ) } },
+        });
         defer io.deinit();
 
         // Compile to WAT
@@ -962,7 +967,9 @@ pub const MetadataTests = struct {
     }
 
     fn compileAndInspect(self: *MetadataTests, code: []const u8) ![]const u8 {
-        var io = try createTestIo(self.allocator);
+        var io = std.Io.Threaded.init(self.allocator, .{
+            .environ = .{ .block = .{ .slice = std.mem.span(std.c.environ) } },
+        });
         defer io.deinit();
 
         // Compile to WAT and inspect metadata sections
@@ -997,7 +1004,9 @@ pub const MetadataTests = struct {
 
 test "Run complete integration test suite" {
     const allocator = testing.allocator;
-    var io = try createTestIo(allocator);
+    var io = std.Io.Threaded.init(allocator, .{
+        .environ = .{ .block = .{ .slice = std.mem.span(std.c.environ) } },
+    });
     defer io.deinit();
 
     std.debug.print("\n" ++ "=" ** 80 ++ "\n", .{});
