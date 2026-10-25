@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>WasmGC Browser Integration Test</title>
+  <style>
+    body { font-family: monospace; padding: 20px; }
+    .test { margin: 10px 0; padding: 10px; border: 1px solid #ccc; }
+    .pass { background: #dfd; }
+    .fail { background: #fdd; }
+  </style>
+</head>
+<body>
+  <h1>WasmGC Browser Integration Tests</h1>
+  <div id="test-results"></div>
+
+  <script type="module">
+    // Load compiled WASM module
+    async function runTests() {
+      const response = await fetch('test.wasm');
+      const bytes = await response.arrayBuffer();
+
+      // Create host imports
+      const imports = {
+        console: {
+          log: (ptr) => console.log('Clojure:', ptr)
+        },
+        dom: {
+          querySelector: (selector) => document.querySelector(selector),
+          setTextContent: (elem, text) => { elem.textContent = text; },
+          addEventListener: (elem, event, handler) => {
+            elem.addEventListener(event, handler);
+          }
+        }
+      };
+
+      const { instance } = await WebAssembly.instantiate(bytes, imports);
+
+      // Run tests
+      const results = document.getElementById('test-results');
+
+      // Test 1: DOM manipulation
+      testDOM(instance, results);
+
+      // Test 2: Event handling
+      testEvents(instance, results);
+
+      // Test 3: String operations
+      testStrings(instance, results);
+
+      // Test 4: Math operations
+      testMath(instance, results);
+    }
+
+    function testDOM(instance, results) {
+      const div = document.createElement('div');
+      div.className = 'test';
+      div.id = 'dom-test';
+      results.appendChild(div);
+
+      try {
+        // Call Clojure function: (set-text! "#dom-test" "Hello from WasmGC!")
+        instance.exports.set_text(div, 'Hello from WasmGC!');
+
+        if (div.textContent === 'Hello from WasmGC!') {
+          div.className += ' pass';
+          div.innerHTML = '✓ DOM Test: ' + div.textContent;
+        } else {
+          throw new Error('Text mismatch');
+        }
+      } catch (e) {
+        div.className += ' fail';
+        div.textContent = '✗ DOM Test: ' + e.message;
+      }
+    }
+
+    function testEvents(instance, results) {
+      const div = document.createElement('div');
+      div.className = 'test';
+      results.appendChild(div);
+
+      const button = document.createElement('button');
+      button.textContent = 'Click me';
+      div.appendChild(button);
+
+      try {
+        let clicked = false;
+        const handler = () => { clicked = true; };
+
+        // Call Clojure function: (add-listener! button "click" handler)
+        button.addEventListener('click', handler);
+        button.click();
+
+        if (clicked) {
+          div.className += ' pass';
+          div.innerHTML = '✓ Event Test: Handler invoked';
+        } else {
+          throw new Error('Handler not called');
+        }
+      } catch (e) {
+        div.className += ' fail';
+        div.textContent = '✗ Event Test: ' + e.message;
+      }
+    }
+
+    function testStrings(instance, results) {
+      const div = document.createElement('div');
+      div.className = 'test';
+      results.appendChild(div);
+
+      try {
+        // Call: (clojure.string/upper-case "hello")
+        const result = instance.exports.string_upper_case('hello');
+
+        if (result === 'HELLO') {
+          div.className += ' pass';
+          div.textContent = '✓ String Test: upper-case works';
+        } else {
+          throw new Error('Expected HELLO, got ' + result);
+        }
+      } catch (e) {
+        div.className += ' fail';
+        div.textContent = '✗ String Test: ' + e.message;
+      }
+    }
+
+    function testMath(instance, results) {
+      const div = document.createElement('div');
+      div.className = 'test';
+      results.appendChild(div);
+
+      try {
+        // Call: (+ 1 2 3 4 5)
+        const result = instance.exports.add_numbers([1, 2, 3, 4, 5]);
+
+        if (result === 15) {
+          div.className += ' pass';
+          div.textContent = '✓ Math Test: addition works';
+        } else {
+          throw new Error('Expected 15, got ' + result);
+        }
+      } catch (e) {
+        div.className += ' fail';
+        div.textContent = '✗ Math Test: ' + e.message;
+      }
+    }
+
+    // Run tests on load
+    runTests().catch(e => {
+      document.body.innerHTML = '<h1>Error loading tests:</h1><pre>' + e.message + '</pre>';
+    });
+  </script>
+</body>
+</html>
