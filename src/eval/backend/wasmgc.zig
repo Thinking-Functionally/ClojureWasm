@@ -28,11 +28,6 @@
 const std = @import("std");
 const Runtime = @import("Runtime");
 
-// wasmgc module is a backend — it takes AST Nodes as input.
-// It should not orchestrate the Reader/Analyzer pipeline; that's the caller's job.
-// For now, stub out Node as an empty type until we wire up the real AST module.
-const Node = struct {};
-
 /// Compiler instance for WasmGC backend.
 pub const Compiler = struct {
     arena: std.mem.Allocator,
@@ -49,7 +44,7 @@ pub const Compiler = struct {
     /// Compile AST node to WAT string.
     /// Spec: Takes already-expanded AST from Analyzer and emits WAT text.
     /// Phase: Incremental TDD - implementing features one by one
-    pub fn compile(self: *Compiler, node: *const Node) ![]const u8 {
+    pub fn compile(self: *Compiler, node: anytype) ![]const u8 {
         _ = self;
         _ = node;
         return error.NotImplemented;
