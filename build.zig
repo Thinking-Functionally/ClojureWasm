@@ -64,8 +64,9 @@ pub fn build(b: *std.Build) void {
     // e2e green on vm). `tree_walk` is retained as the differential oracle /
     // reference implementation, selectable via `-Dbackend=tree_walk` (the
     // enum FIELD spelling — `-Dbackend=tree-walk` is rejected by zig build).
-    const Backend = enum { tree_walk, vm };
-    const backend = b.option(Backend, "backend", "Evaluation backend (vm default — production; tree_walk = differential oracle)") orelse .vm;
+    // `wasmgc` is the WebAssembly backend (Month 5 development).
+    const Backend = enum { tree_walk, vm, wasmgc };
+    const backend = b.option(Backend, "backend", "Evaluation backend (vm default — production; tree_walk = differential oracle; wasmgc = WebAssembly/browser)") orelse .vm;
     build_options.addOption(Backend, "backend", backend);
 
     // `-Dwasm` — the minimal polyglot Wasm FFI surface (ADR-0099 / CFP P1).
@@ -111,7 +112,7 @@ pub fn build(b: *std.Build) void {
     // blob; the shipped cljw embeds only the blob. The flag picks the mode.
     const cache_gen_options = b.addOptions();
     cache_gen_options.addOption([]const u8, "version", build_zon.version);
-    cache_gen_options.addOption(Backend, "backend", backend);
+    cache_gen_options.addOption(Backend, "backend", .vm); // Always use VM for build-time compilation
     cache_gen_options.addOption(bool, "wasm", wasm_enabled);
     cache_gen_options.addOption(bool, "embed_raw_clj_sources", true);
     cache_gen_mod.addOptions("build_options", cache_gen_options);
@@ -327,6 +328,27 @@ pub fn build(b: *std.Build) void {
     const wasmgc_month3_tests = b.addTest(.{ .root_module = wasmgc_month3_test_mod });
     const run_wasmgc_month3_tests = b.addRunArtifact(wasmgc_month3_tests);
 
+    // Converter tests (Node → ASTNode conversion)
+    const wasmgc_converter_test_mod = b.createModule(.{
+        .root_source_file = b.path("test/wasmgc/converter_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    wasmgc_converter_test_mod.addImport("wasmgc", wasmgc_mod);
+    wasmgc_converter_test_mod.addImport("Runtime", runtime_mod);
+    const wasmgc_converter_tests = b.addTest(.{ .root_module = wasmgc_converter_test_mod });
+    const run_wasmgc_converter_tests = b.addRunArtifact(wasmgc_converter_tests);
+
+    // Manual flow test (Option B: prove WAT → WASM → zwasm works)
+    const wasmgc_manual_test_mod = b.createModule(.{
+        .root_source_file = b.path("test/wasmgc/manual_add_test.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    if (zwasm_mod) |zm| wasmgc_manual_test_mod.addImport("zwasm", zm);
+    const wasmgc_manual_tests = b.addTest(.{ .root_module = wasmgc_manual_test_mod });
+    const run_wasmgc_manual_tests = b.addRunArtifact(wasmgc_manual_tests);
+
     // Integration tests commented out above
 
     test_step.dependOn(&run_wasmgc_tests.step);
@@ -334,6 +356,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_wasmgc_collections_tests.step);
     test_step.dependOn(&run_wasmgc_e2e_tests.step);
     test_step.dependOn(&run_wasmgc_month3_tests.step);
+    test_step.dependOn(&run_wasmgc_converter_tests.step);
+    if (wasm_enabled) test_step.dependOn(&run_wasmgc_manual_tests.step);
     // Integration test disabled - see comment above
     // test_step.dependOn(&run_wasmgc_integration_tests.step);
 

@@ -191,7 +191,7 @@ pub fn run(alloc: std.mem.Allocator, io: std.Io, bytes: []const u8, opts: RunOpt
         opts.argv,
         &out_list,
         &err_list,
-        opts.stdin,
+        if (opts.stdin) |stdin_bytes| zwasm.cli.run.StdinSource{ .bytes = stdin_bytes } else zwasm.cli.run.StdinSource{ .none = {} },
         null, // invoke_name → _start / main / first export
         opts.preopens,
         opts.env_keys,

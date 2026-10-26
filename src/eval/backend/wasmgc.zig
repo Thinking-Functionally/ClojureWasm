@@ -26,7 +26,7 @@
 //! ADR: (to be written in docs/adr/)
 
 const std = @import("std");
-const Runtime = @import("Runtime");
+const Runtime = @import("../../runtime/runtime.zig").Runtime;
 const wasmgc_compiler = @import("wasmgc/compiler.zig");
 const ASTNode = wasmgc_compiler.ASTNode;
 const Value = wasmgc_compiler.Value;
@@ -46,32 +46,31 @@ pub const Compiler = struct {
 
     /// Compile AST node to WAT string.
     /// Spec: Takes already-expanded AST from Analyzer and emits WAT text.
-    /// Phase: Wires Runtime's Node through converter to wasmgc/compiler.zig
     pub fn compile(self: *Compiler, node: anytype) ![]const u8 {
-        // Convert Runtime Node to WasmGC ASTNode
+        // Convert Runtime's Node to WasmGC's ASTNode
         const ast_node = try self.convertNode(node);
 
-        // Compile single expression as module
-        const forms = [_]ASTNode{ast_node};
-        return wasmgc_compiler.compileModule(self.arena, &forms);
+        // Wrap in array for compileModule (expects []ASTNode)
+        var forms = [_]ASTNode{ast_node};
+
+        // Call the real compiler
+        return try wasmgc_compiler.compileModule(self.arena, forms[0..]);
     }
 
     /// Convert Runtime's Node to WasmGC's ASTNode representation.
     fn convertNode(self: *Compiler, node: anytype) error{OutOfMemory}!ASTNode {
-        const NodeType = @TypeOf(node.*);
+        const NodeType = @TypeOf(node);
 
-        // Handle anytype - could be *Node or *const Node
-        if (@typeInfo(NodeType) != .Union) {
-            @compileError("Expected Node union type");
-        }
+        // Dereference if it's a pointer
+        const actual_node = if (@typeInfo(NodeType) == .pointer) node.* else node;
 
-        return switch (node.*) {
+        return switch (actual_node) {
             .constant => |c| ASTNode{
                 .literal = .{ .value = try self.convertValue(c.value) }
             },
 
             .var_ref => |v| ASTNode{
-                .var_ref = .{ .name = v.name }
+                .var_ref = .{ .name = v.var_ptr.name }
             },
 
             .local_ref => |l| ASTNode{
@@ -80,12 +79,12 @@ pub const Compiler = struct {
 
             .if_node => |i| blk: {
                 const test_expr = try self.arena.create(ASTNode);
-                test_expr.* = try self.convertNode(i.test_node);
+                test_expr.* = try self.convertNode(i.cond);
 
                 const then_expr = try self.arena.create(ASTNode);
-                then_expr.* = try self.convertNode(i.then_node);
+                then_expr.* = try self.convertNode(i.then_branch);
 
-                const else_expr = if (i.else_node) |e| blk2: {
+                const else_expr = if (i.else_branch) |e| blk2: {
                     const else_ptr = try self.arena.create(ASTNode);
                     else_ptr.* = try self.convertNode(e);
                     break :blk2 else_ptr;
@@ -101,121 +100,120 @@ pub const Compiler = struct {
             },
 
             .let_node => |l| blk: {
-                var bindings = std.ArrayList(wasmgc_compiler.Binding).init(self.arena);
+                var bindings = std.ArrayList(wasmgc_compiler.Binding).empty;
                 for (l.bindings) |binding_node| {
-                    const init = try self.arena.create(ASTNode);
-                    init.* = try self.convertNode(binding_node.binding_node.init_node);
-                    try bindings.append(.{
-                        .name = binding_node.binding_node.name,
-                        .init = init,
+                    const init_ast = try self.arena.create(ASTNode);
+                    init_ast.* = try self.convertNode(binding_node.value_expr);
+                    try bindings.append(self.arena, .{
+                        .name = binding_node.name,
+                        .init = init_ast,
                     });
                 }
 
-                var body = std.ArrayList(ASTNode).init(self.arena);
-                for (l.body) |body_node| {
-                    try body.append(try self.convertNode(body_node));
-                }
+                // body is a single *const Node, not array
+                const body_ast = try self.arena.create(ASTNode);
+                body_ast.* = try self.convertNode(l.body);
+                var body_array = [_]ASTNode{body_ast.*};
 
                 break :blk ASTNode{
                     .let_expr = .{
-                        .bindings = try bindings.toOwnedSlice(),
-                        .body = try body.toOwnedSlice(),
+                        .bindings = try bindings.toOwnedSlice(self.arena),
+                        .body = &body_array,
                     }
                 };
             },
 
             .do_node => |d| blk: {
-                var exprs = std.ArrayList(ASTNode).init(self.arena);
-                for (d.body) |expr| {
-                    try exprs.append(try self.convertNode(expr));
+                var exprs = std.ArrayList(ASTNode).empty;
+                for (d.forms) |expr| {
+                    try exprs.append(self.arena, try self.convertNode(expr));
                 }
                 break :blk ASTNode{
-                    .do_expr = .{ .exprs = try exprs.toOwnedSlice() }
+                    .do_expr = .{ .exprs = try exprs.toOwnedSlice(self.arena) }
                 };
             },
 
             .fn_node => |f| blk: {
                 // Convert parameter names
-                var params = std.ArrayList([]const u8).init(self.arena);
-                for (f.params) |param| {
-                    try params.append(param);
+                var params = std.ArrayList([]const u8).empty;
+                for (f.methods[0].params) |param| {
+                    try params.append(self.arena, param);
                 }
 
-                // Convert body
-                var body = std.ArrayList(ASTNode).init(self.arena);
-                for (f.body) |node_ptr| {
-                    try body.append(try self.convertNode(node_ptr));
-                }
+                // body is a single *const Node
+                const body_ast = try self.arena.create(ASTNode);
+                body_ast.* = try self.convertNode(f.methods[0].body);
+                var body_array = [_]ASTNode{body_ast.*};
 
                 break :blk ASTNode{
                     .fn_expr = .{
-                        .params = try params.toOwnedSlice(),
-                        .body = try body.toOwnedSlice(),
+                        .params = try params.toOwnedSlice(self.arena),
+                        .body = &body_array,
                     }
                 };
             },
 
             .def_node => |d| blk: {
-                const init = try self.arena.create(ASTNode);
-                init.* = try self.convertNode(d.init_node);
+                const init_ast = try self.arena.create(ASTNode);
+                init_ast.* = try self.convertNode(d.value_expr);
 
                 break :blk ASTNode{
                     .def = .{
                         .name = d.name,
-                        .init = init,
+                        .init = init_ast,
                     }
                 };
             },
 
             .call_node => |c| blk: {
                 const func = try self.arena.create(ASTNode);
-                func.* = try self.convertNode(c.fn_node);
+                func.* = try self.convertNode(c.callee);
 
-                var args = std.ArrayList(ASTNode).init(self.arena);
-                for (c.arg_nodes) |arg| {
-                    try args.append(try self.convertNode(arg));
+                var args = std.ArrayList(ASTNode).empty;
+                for (c.args) |arg| {
+                    try args.append(self.arena, try self.convertNode(arg));
                 }
 
                 break :blk ASTNode{
                     .fn_call = .{
                         .func = func,
-                        .args = try args.toOwnedSlice(),
+                        .args = try args.toOwnedSlice(self.arena),
                     }
                 };
             },
 
             .loop_node => |l| blk: {
-                var bindings = std.ArrayList(wasmgc_compiler.Binding).init(self.arena);
+                var bindings = std.ArrayList(wasmgc_compiler.Binding).empty;
                 for (l.bindings) |binding_node| {
-                    const init = try self.arena.create(ASTNode);
-                    init.* = try self.convertNode(binding_node.binding_node.init_node);
-                    try bindings.append(.{
-                        .name = binding_node.binding_node.name,
-                        .init = init,
+                    const init_ast = try self.arena.create(ASTNode);
+                    init_ast.* = try self.convertNode(binding_node.value_expr);
+                    try bindings.append(self.arena, .{
+                        .name = binding_node.name,
+                        .init = init_ast,
                     });
                 }
 
-                var body = std.ArrayList(ASTNode).init(self.arena);
-                for (l.body) |body_node| {
-                    try body.append(try self.convertNode(body_node));
-                }
+                // body is a single *const Node
+                const body_ast = try self.arena.create(ASTNode);
+                body_ast.* = try self.convertNode(l.body);
+                var body_array = [_]ASTNode{body_ast.*};
 
                 break :blk ASTNode{
                     .loop_expr = .{
-                        .bindings = try bindings.toOwnedSlice(),
-                        .body = try body.toOwnedSlice(),
+                        .bindings = try bindings.toOwnedSlice(self.arena),
+                        .body = &body_array,
                     }
                 };
             },
 
             .recur_node => |r| blk: {
-                var args = std.ArrayList(ASTNode).init(self.arena);
-                for (r.arg_nodes) |arg| {
-                    try args.append(try self.convertNode(arg));
+                var args = std.ArrayList(ASTNode).empty;
+                for (r.args) |arg| {
+                    try args.append(self.arena, try self.convertNode(arg));
                 }
 
                 break :blk ASTNode{
-                    .recur = .{ .args = try args.toOwnedSlice() }
+                    .recur = .{ .args = try args.toOwnedSlice(self.arena) }
                 };
             },
 
@@ -230,21 +228,86 @@ pub const Compiler = struct {
     }
 
     /// Convert Runtime's Value to WasmGC's Value representation.
-    fn convertValue(self: *Compiler, val: @import("Runtime").Value) !Value {
+    fn convertValue(self: *Compiler, val: @import("../../runtime/value/value.zig").Value) !Value {
         _ = self;
-        const v = @import("Runtime").value;
+        const v = @import("../../runtime/value/value.zig");
+        const String = @import("../../runtime/collection/string.zig").String;
 
-        return if (val.isNil())
+        return if (val == v.Value.nil_val)
             .nil
-        else if (val.isTrue() or val.isFalse())
-            Value{ .boolean = val.isTrue() }
-        else if (v.isLong(val))
-            Value{ .long = v.asLong(val) }
-        else if (v.isDouble(val))
-            Value{ .double = v.asDouble(val) }
-        else if (v.isString(val))
-            Value{ .string = v.asString(val).str }
+        else if (val == v.Value.true_val)
+            Value{ .boolean = true }
+        else if (val == v.Value.false_val)
+            Value{ .boolean = false }
+        else if (val.isInt())
+            Value{ .long = @intCast(val.asInteger()) }
+        else if (val.isFloat())
+            Value{ .double = val.asFloat() }
+        else if (val.isString()) blk: {
+            const str_ptr = val.decodePtr(*const String);
+            break :blk Value{ .string = str_ptr.bytes() };
+        }
         else
             .nil; // Default for unsupported types
     }
 };
+
+/// Execute compiled WAT code and return the result (Option A).
+/// Flow: WAT → wasm-tools → WASM binary → zwasm → execute → Value
+pub fn executeWat(rt: *Runtime, env: anytype, arena: std.mem.Allocator, wat_code: []const u8) !@import("../../runtime/value/value.zig").Value {
+    _ = env;
+    const ValueType = @import("../../runtime/value/value.zig").Value;
+    const zwasm = @import("zwasm");
+
+    // Step 1: Write WAT to temp file
+    const tmp_wat = "/tmp/cljw_wasmgc.wat";
+    {
+        const file = try std.Io.Dir.cwd().createFile(rt.io, tmp_wat, .{});
+        defer file.close(rt.io);
+        var buf: [4096]u8 = undefined;
+        var w = file.writer(rt.io, &buf);
+        try w.interface.writeAll(wat_code);
+        try w.flush();
+    }
+
+    // Step 2: Convert WAT → WASM with wasm-tools
+    const tmp_wasm = "/tmp/cljw_wasmgc.wasm";
+    const convert = try std.process.Child.run(.{
+        .allocator = arena,
+        .argv = &[_][]const u8{ "wasm-tools", "parse", tmp_wat, "-o", tmp_wasm },
+    });
+    defer arena.free(convert.stdout);
+    defer arena.free(convert.stderr);
+
+    if (convert.term.Exited != 0) return error.WasmConversionFailed;
+
+    // Step 3: Load WASM with zwasm
+    const wasm_bytes = try std.fs.readFileAlloc(arena, tmp_wasm, 1024 * 1024);
+    defer arena.free(wasm_bytes);
+
+    var engine = try zwasm.Engine.init(arena);
+    defer engine.deinit();
+
+    var module = try zwasm.Module.init(&engine, wasm_bytes);
+    defer module.deinit();
+
+    var instance = try zwasm.Instance.init(&module, .{});
+    defer instance.deinit();
+
+    // Step 4: Call exported "main" function
+    const result = try instance.call("main", &[_]zwasm.Value{}, arena);
+    defer if (result) |r| arena.free(r);
+
+    // Step 5: Convert zwasm result to ClojureWasm Value
+    if (result) |values| {
+        if (values.len == 0) return ValueType.nil_val;
+        const val = values[0];
+        return switch (val) {
+            .i64 => |i| @import("../../runtime/value/value.zig").makeInteger(rt, i),
+            .f64 => |f| @import("../../runtime/value/value.zig").makeFloat(rt, f),
+            else => ValueType.nil_val,
+        };
+    }
+
+    return ValueType.nil_val;
+}

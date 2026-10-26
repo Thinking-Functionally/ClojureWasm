@@ -18,7 +18,7 @@
 //! - Function-level compilation unit (each defn → one WAT func)
 
 const std = @import("std");
-const value_types = @import("value_types");
+const value_types = @import("value_types.zig");
 const Allocator = std.mem.Allocator;
 
 /// Compilation context for a single module

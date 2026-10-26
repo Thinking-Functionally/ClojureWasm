@@ -6,8 +6,10 @@
 //! evaluate a `Node`. `build_options.backend == .tree_walk` recurses
 //! through `tree_walk.eval` (the default). `build_options.backend ==
 //! .vm` compiles the node into a `BytecodeChunk` (per-form arena
-//! lifetime) and runs it through `vm.eval`. The choice happens at
-//! comptime; only one path lands in the final binary.
+//! lifetime) and runs it through `vm.eval`. `build_options.backend ==
+//! .wasmgc` compiles the node into WAT and executes via WebAssembly
+//! runtime. The choice happens at comptime; only one path lands in the
+//! final binary.
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -23,6 +25,7 @@ const Value = value_mod.Value;
 const tree_walk = @import("backend/tree_walk.zig");
 const vm = @import("backend/vm.zig");
 const vm_compiler = @import("backend/vm/compiler.zig");
+const wasmgc = @import("backend/wasmgc.zig");
 const serialize = @import("bytecode/serialize.zig");
 const analyzer = @import("analyzer/analyzer.zig");
 const root_set = @import("../runtime/gc/root_set.zig");
@@ -88,7 +91,13 @@ pub fn evalForm(
     const saved_consult_env = dispatch.current_env;
     dispatch.current_env = env;
     defer dispatch.current_env = saved_consult_env;
-    if (comptime build_options.backend == .vm) {
+
+    if (comptime build_options.backend == .wasmgc) {
+        // WasmGC backend: compile to WAT and execute via WebAssembly runtime
+        var compiler = wasmgc.Compiler.init(arena, rt);
+        const wat_code = try compiler.compile(node);
+        return try wasmgc.executeWat(rt, env, arena, wat_code);
+    } else if (comptime build_options.backend == .vm) {
         const chunk = try vm_compiler.compile(rt, arena, node);
         return vm.eval(rt, env, locals, &chunk);
     } else {

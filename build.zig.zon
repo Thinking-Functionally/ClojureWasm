@@ -11,12 +11,8 @@
         // zwasm v2 embedding API (F-001 / D-037). `lazy` so the DEFAULT build +
         // gate never resolve it — only `-Dwasm` (b.lazyDependency) does.
         //
-        // PINNED to STABLE tag **v2.5.0** (2026-08-11) — cljw's final pin.
-        // It brings full WASI 0.3 coverage (all six proposals, 45/45 on the
-        // official wasm32-wasip3 corpus across macOS/Linux/Windows) plus the
-        // 81 missing C-API symbols in `libzwasm.a` (#161). Neither changes
-        // cljw's embedding surface: Engine/Module/Instance on `.auto` (=
-        // JIT-default, D-488) is the same API it was at v2.2.0.
+        // UPGRADED to **v2.7.0** (2026-10-26) for WasmGC backend integration.
+        // Provides latest WasmGC support and API improvements.
         //
         // The v2.4.1 pin before it was load-bearing twice over, both found
         // FROM cljw and neither reachable by zwasm's own fixtures: #157 (a
@@ -38,8 +34,8 @@
         // anything else claims that name. The `.hash` is content-addressed, so
         // the move did not change it (verified by `zig fetch` on both URLs).
         .zwasm = .{
-            .url = "git+https://github.com/zwasm/zwasm.git?ref=v2.5.0#278587f608a7564d8f2dfa53f567aab70f661296",
-            .hash = "zwasm-2.5.0-FT1Fv4KPkgCaKsDmsn05BTYsoEhH7RCUreSX8a3mwFha",
+            .url = "git+https://github.com/zwasm/zwasm.git?ref=v2.7.0#d09d9248825c35c75db99524a09852a4a25ff8c1",
+            .hash = "zwasm-2.7.0-FT1Fv30EnABcFBvnsljWgUi0Cj957rcAHogV2qJqUXWz",
             .lazy = true,
         },
     },
