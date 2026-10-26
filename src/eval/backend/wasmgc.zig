@@ -264,9 +264,12 @@ pub fn executeWat(rt: *Runtime, env: anytype, arena: std.mem.Allocator, wat_code
     // Step 1: Write WAT to temp file using standard Zig API
     const tmp_wat = "/tmp/cljw_wasmgc.wat";
     {
-        const file = try std.fs.cwd().createFile(tmp_wat, .{});
-        defer file.close();
-        try file.writeAll(wat_code);
+        const file = try std.Io.Dir.cwd().createFile(rt.io, tmp_wat, .{});
+        defer file.close(rt.io);
+        var buf: [4096]u8 = undefined;
+        var fw = file.writer(rt.io, &buf);
+        try fw.interface.writeAll(wat_code);
+        try fw.flush();
     }
 
     // Step 2: Convert WAT → WASM with wasm-tools (shell command)
@@ -280,7 +283,9 @@ pub fn executeWat(rt: *Runtime, env: anytype, arena: std.mem.Allocator, wat_code
     if (result.term.Exited != 0) return error.WasmConversionFailed;
 
     // Step 3: Read WASM binary
-    const wasm_bytes = try std.fs.cwd().readFileAlloc(arena, tmp_wasm, 10 * 1024 * 1024);
+    const file = try std.Io.Dir.cwd().openFile(rt.io, tmp_wasm, .{});
+    defer file.close(rt.io);
+    const wasm_bytes = try file.readToEnd(rt.io, arena, 10 * 1024 * 1024);
     defer arena.free(wasm_bytes);
 
     // Step 4: Execute with zwasm (v2 API from docs/examples/zig_host/hello.zig)
@@ -300,6 +305,3 @@ pub fn executeWat(rt: *Runtime, env: anytype, arena: std.mem.Allocator, wat_code
     return ValueType.makeInteger(@intCast(result_i64));
 }
 
-
-    return ValueType.nil_val;
-}
