@@ -92,15 +92,19 @@ pub fn evalForm(
     dispatch.current_env = env;
     defer dispatch.current_env = saved_consult_env;
 
-    if (comptime build_options.backend == .wasmgc) {
+    // Runtime backend selection: check rt.backend_override first, then fall back to compile-time default
+    const backend_name = rt.backend_override orelse @tagName(build_options.backend);
+
+    if (std.mem.eql(u8, backend_name, "wasmgc")) {
         // WasmGC backend: compile to WAT and execute via WebAssembly runtime
         var compiler = wasmgc.Compiler.init(arena, rt);
         const wat_code = try compiler.compile(node);
         return try wasmgc.executeWat(rt, env, arena, wat_code);
-    } else if (comptime build_options.backend == .vm) {
+    } else if (std.mem.eql(u8, backend_name, "vm")) {
         const chunk = try vm_compiler.compile(rt, arena, node);
         return vm.eval(rt, env, locals, &chunk);
     } else {
+        // tree_walk backend
         // GC-ROOT: A6 — the TOP-LEVEL locals window on the tree_walk backend
         // (vm.eval pushes its own A1 frame; tree_walk fn activations push per
         // call, but a top-level `let`'s slots live in THIS caller-owned array

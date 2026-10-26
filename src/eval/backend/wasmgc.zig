@@ -28,6 +28,7 @@
 const std = @import("std");
 const Runtime = @import("../../runtime/runtime.zig").Runtime;
 const wasmgc_compiler = @import("wasmgc/compiler.zig");
+const file_io = @import("../../runtime/file_io.zig");
 const ASTNode = wasmgc_compiler.ASTNode;
 const Value = wasmgc_compiler.Value;
 
@@ -257,7 +258,6 @@ pub const Compiler = struct {
 /// Based on zwasm v2 embedding API (docs/examples/zig_host/hello.zig)
 pub fn executeWat(rt: *Runtime, env: anytype, arena: std.mem.Allocator, wat_code: []const u8) !@import("../../runtime/value/value.zig").Value {
     _ = env;
-    _ = rt;
     const ValueType = @import("../../runtime/value/value.zig").Value;
     const zwasm = @import("zwasm");
 
@@ -274,19 +274,15 @@ pub fn executeWat(rt: *Runtime, env: anytype, arena: std.mem.Allocator, wat_code
 
     // Step 2: Convert WAT → WASM with wasm-tools (shell command)
     const tmp_wasm = "/tmp/cljw_wasmgc.wasm";
-    const result = try std.process.Child.run(.{
-        .allocator = arena,
+    const result = try std.process.run(arena, rt.io, .{
         .argv = &[_][]const u8{ "wasm-tools", "parse", tmp_wat, "-o", tmp_wasm },
     });
     defer arena.free(result.stdout);
     defer arena.free(result.stderr);
-    if (result.term.Exited != 0) return error.WasmConversionFailed;
+    if (result.term != .exited or result.term.exited != 0) return error.WasmConversionFailed;
 
     // Step 3: Read WASM binary
-    const file = try std.Io.Dir.cwd().openFile(rt.io, tmp_wasm, .{});
-    defer file.close(rt.io);
-    const wasm_bytes = try file.readToEnd(rt.io, arena, 10 * 1024 * 1024);
-    defer arena.free(wasm_bytes);
+    const wasm_bytes = try file_io.readAll(rt.io, arena, tmp_wasm);
 
     // Step 4: Execute with zwasm (v2 API from docs/examples/zig_host/hello.zig)
     var eng = try zwasm.Engine.init(arena, .{});
@@ -296,12 +292,12 @@ pub fn executeWat(rt: *Runtime, env: anytype, arena: std.mem.Allocator, wat_code
     var inst = try mod.instantiate(.{});
     defer inst.deinit();
 
-    // Step 5: Call "main" function and convert result to Value
+    // Step 5: Call "__repl_expr" function and convert result to Value
     const MainFn = fn () i64;
-    const main_fn = inst.typedFunc(MainFn, "main");
+    const main_fn = inst.typedFunc(MainFn, "__repl_expr");
     const result_i64 = try main_fn.call(.{});
 
     // Convert i64 → ClojureWasm Value
-    return ValueType.makeInteger(@intCast(result_i64));
+    return ValueType.initInteger(@intCast(result_i64));
 }
 

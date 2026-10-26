@@ -69,22 +69,15 @@ pub fn build(b: *std.Build) void {
     const backend = b.option(Backend, "backend", "Evaluation backend (vm default — production; tree_walk = differential oracle; wasmgc = WebAssembly/browser)") orelse .vm;
     build_options.addOption(Backend, "backend", backend);
 
-    // `-Dwasm` — the minimal polyglot Wasm FFI surface (ADR-0099 / CFP P1).
-    // F-001 isolation: link zwasm v2 INTO the cljw binary + activate the `wasm`
-    // namespace, but ONLY when the flag is set AND the lazy `zwasm` dep actually
-    // resolves. `build_options.wasm` is set true *only inside* the resolved-dep
-    // block, so the null-first-pass of `b.lazyDependency` (fetch pending) leaves
-    // it false — `runtime/cljw/wasm/*.zig` (and its `@import("zwasm")`) is then
-    // not analysed, so no compile error. The default build / `run_all.sh` gate
-    // never reach `b.lazyDependency` with the flag → no fetch, no zwasm symbols.
-    const wasm = b.option(bool, "wasm", "Build with the polyglot Wasm FFI surface (embeds zwasm v2, ADR-0099).") orelse false;
+    // zwasm v2 — always linked for wasmgc backend support.
+    // The polyglot wasm namespace (ADR-0099) is still gated by `-Dwasm`.
     var wasm_enabled = false;
     var zwasm_mod: ?*std.Build.Module = null;
-    if (wasm) {
-        if (b.lazyDependency("zwasm", .{ .target = target, .optimize = optimize })) |zw| {
-            zwasm_mod = zw.module("zwasm");
-            wasm_enabled = true;
-        }
+    if (b.lazyDependency("zwasm", .{ .target = target, .optimize = optimize })) |zw| {
+        zwasm_mod = zw.module("zwasm");
+        // Enable wasm namespace only if explicitly requested via -Dwasm
+        const wasm = b.option(bool, "wasm", "Build with the polyglot Wasm FFI surface (ADR-0099).") orelse false;
+        wasm_enabled = wasm;
     }
     build_options.addOption(bool, "wasm", wasm_enabled);
     // Both the cljw exe AND the build-time bootstrap tool (cache_gen, below)

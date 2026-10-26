@@ -89,7 +89,7 @@ fn runMain(
         }
         const ns = eff[1];
         const src = try synthMainNs(arena, ns, eff[2..]);
-        try runner.runSource(io, gpa, arena, stdout, stderr, src, "<-M>", load_paths, false, fs_jail_root);
+        try runner.runSource(io, gpa, arena, stdout, stderr, src, "<-M>", load_paths, false, fs_jail_root, null);
     } else if (std.mem.eql(u8, head, "-e") or std.mem.eql(u8, head, "--eval")) {
         if (eff.len < 2) {
             try stderr.writeAll("-e requires an expression argument\n");
@@ -97,7 +97,7 @@ fn runMain(
             std.process.exit(1);
         }
         // Standalone -e: print non-nil results, matching `cljw -e`.
-        try runner.runSource(io, gpa, arena, stdout, stderr, eff[1], "<-e>", load_paths, true, fs_jail_root);
+        try runner.runSource(io, gpa, arena, stdout, stderr, eff[1], "<-e>", load_paths, true, fs_jail_root, null);
     } else if (std.mem.eql(u8, head, "-h") or std.mem.eql(u8, head, "--help") or std.mem.eql(u8, head, "-?")) {
         try stdout.writeAll(
             \\Usage under -M: cljw -M[:aliases] <main-opt> [args]
@@ -128,7 +128,7 @@ fn runMain(
         try writeClArgsSetter(&aw.writer, eff[1..]);
         try aw.writer.writeByte('\n');
         try aw.writer.writeAll(file_src);
-        try runner.runSource(io, gpa, arena, stdout, stderr, try aw.toOwnedSlice(), head, load_paths, false, fs_jail_root);
+        try runner.runSource(io, gpa, arena, stdout, stderr, try aw.toOwnedSlice(), head, load_paths, false, fs_jail_root, null);
     }
 }
 
@@ -193,7 +193,7 @@ fn runExec(
     }
 
     const src = try synthExec(arena, fn_sym, lastAliasExecArgs(cfg, alias_names), run_args[kv_start..], run_args);
-    try runner.runSource(io, gpa, arena, stdout, stderr, src, "<-X>", load_paths, false, fs_jail_root);
+    try runner.runSource(io, gpa, arena, stdout, stderr, src, "<-X>", load_paths, false, fs_jail_root, null);
 }
 
 /// `(let [f (requiring-resolve 'ns/fn)] (if f (f (merge ALIAS_ARGS {CLI})) (throw …)))`.

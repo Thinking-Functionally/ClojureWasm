@@ -309,12 +309,27 @@ pub fn compileModule(allocator: Allocator, forms: []ASTNode) ![]const u8 {
     return ctx.wat_output.toOwnedSlice();
 }
 
-/// Compile a top-level form (def/defn)
+/// Compile a top-level form (def/defn/expr for REPL)
 fn compileTopLevelForm(ctx: *CompileContext, form: ASTNode) !void {
     switch (form) {
         .def => |d| try compileDef(ctx, d),
         .defn => |fn_def| try compileDefn(ctx, fn_def),
-        else => return error.InvalidTopLevelForm,
+        // For REPL evaluation: wrap expression in an exported function
+        // Return i64 for zwasm compatibility (GC refs can't cross boundary)
+        else => {
+            try ctx.wat_output.appendSlice("  (func $__repl_expr (export \"__repl_expr\") (result i64)\n");
+            try ctx.wat_output.appendSlice("    (local $val (ref $Value))\n");
+            try ctx.wat_output.appendSlice("    ");
+            try compileExpr(ctx, form);
+            try ctx.wat_output.appendSlice("\n");
+            // Extract i64 from Value struct (assumes integer literal for now)
+            try ctx.wat_output.appendSlice("    (local.set $val)\n");  // Store Value
+            try ctx.wat_output.appendSlice("    (struct.get $Value 1 (local.get $val))\n");  // Get data field
+            try ctx.wat_output.appendSlice("    (ref.cast (ref i31))\n");  // Cast to i31
+            try ctx.wat_output.appendSlice("    (i31.get_s)\n");  // Extract as i32
+            try ctx.wat_output.appendSlice("    (i64.extend_i32_s)\n");  // Extend to i64
+            try ctx.wat_output.appendSlice("  )\n");
+        },
     }
 }
 
@@ -411,34 +426,29 @@ fn compileLiteral(ctx: *CompileContext, lit: Literal) !void {
         .boolean => |b| {
             try ctx.wat_output.appendSlice("(struct.new $Value\n");
             try ctx.wat_output.appendSlice("      (i32.const ");
-            try ctx.wat_output.appendSlice(value_types.TypeTag.boolean.toWAT());
+            try ctx.wat_output.appendSlice(if (b) "1" else "0");  // tag: 1=true, 0=false for now
             try ctx.wat_output.appendSlice(")\n");
-            try ctx.wat_output.appendSlice("      (union.new $ValueData $boolean (i32.const ");
-            try ctx.wat_output.appendSlice(if (b) "1" else "0");
-            try ctx.wat_output.appendSlice(")))");
+            try ctx.wat_output.appendSlice("      (ref.null any))");
         },
         .long => |n| {
             try ctx.wat_output.appendSlice("(struct.new $Value\n");
             try ctx.wat_output.appendSlice("      (i32.const ");
             try ctx.wat_output.appendSlice(value_types.TypeTag.long.toWAT());
             try ctx.wat_output.appendSlice(")\n");
-            try ctx.wat_output.appendSlice("      (union.new $ValueData $long (i64.const ");
+            try ctx.wat_output.appendSlice("      (ref.i31 (i32.wrap_i64 (i64.const ");
             var buf: [32]u8 = undefined;
             const str = try std.fmt.bufPrint(&buf, "{d}", .{n});
             try ctx.wat_output.appendSlice(str);
-            try ctx.wat_output.appendSlice(")))");
+            try ctx.wat_output.appendSlice("))))");
         },
         .double => |f| {
             try ctx.wat_output.appendSlice("(struct.new $Value\n");
             try ctx.wat_output.appendSlice("      (i32.const ");
             try ctx.wat_output.appendSlice(value_types.TypeTag.double.toWAT());
             try ctx.wat_output.appendSlice(")\n");
-            try ctx.wat_output.appendSlice("      (union.new $ValueData $double (f64.const ");
+            try ctx.wat_output.appendSlice("      (ref.null any))");  // TODO: box f64
             var buf: [32]u8 = undefined;
-            const str = try std.fmt.bufPrint(&buf, "{d}", .{f});
-            try ctx.wat_output.appendSlice(str);
-            try ctx.wat_output.appendSlice(str);
-            try ctx.wat_output.appendSlice(")))");
+            _ = try std.fmt.bufPrint(&buf, "{d}", .{f});
         },
         .string => |s| {
             try ctx.wat_output.appendSlice("(call $rt_make_string (array.new_fixed $String ");

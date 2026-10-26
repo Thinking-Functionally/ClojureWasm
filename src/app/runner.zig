@@ -56,6 +56,8 @@ pub fn runSource(
     /// Deploy-mode FS jail root (`CLJW_FS_ROOT`), or null for unconfined local
     /// CLI (ADR-0123 / SE-6/7). Confines slurp / spit / wasm/load to the subtree.
     fs_jail_root: ?[]const u8,
+    /// Runtime backend override (tree_walk, vm, or wasmgc), or null for compile-time default.
+    backend_override: ?[]const u8,
 ) !void {
     const ctx = error_print.SourceContext{ .file = source_label, .text = source_text };
 
@@ -64,6 +66,7 @@ pub fn runSource(
     // --- Runtime + Env + backend setup ---
     var rt = Runtime.init(io, gpa);
     defer rt.deinit();
+    rt.backend_override = backend_override;
     // Route println/print/prn through the SAME writer as the result-print
     // below — one offset-tracking stdout writer per process (D-096).
     rt.stdout = stdout;

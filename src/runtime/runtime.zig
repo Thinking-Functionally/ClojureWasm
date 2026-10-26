@@ -377,6 +377,11 @@ pub const Runtime = struct {
     /// set by the CLI. Empty in the test/embedded path (embedded-only).
     load_paths: []const []const u8 = &.{},
 
+    /// Runtime backend override. When non-null, overrides the compile-time
+    /// backend selection for this runtime instance. Set by CLI `--backend` flag.
+    /// Values: "tree_walk", "vm", "wasmgc". Null uses compile-time default.
+    backend_override: ?[]const u8 = null,
+
     /// Set of namespace names that have FULLY loaded (ADR-0084). Distinct from
     /// `require_in_progress` (in-flight) and from `findNs` (an ns exists with
     /// partial mappings mid-load): a require skips only when the lib is in this

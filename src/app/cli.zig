@@ -304,6 +304,7 @@ fn dispatchArgsRest(
     // the program prints. Set false in the file-open + stdin branches below.
     var print_results: bool = true;
     var compare_mode: bool = false;
+    var backend_override: ?[]const u8 = null;
     var classpath_arg: ?[]const u8 = null;
     var alias_names: std.ArrayList([]const u8) = .empty;
     // `-M`/`-X` (or a bare top-level `-m`) switch from classpath-only to a
@@ -344,6 +345,8 @@ fn dispatchArgsRest(
                 \\  --compare          Run source through tree_walk AND vm backends;
                 \\                     print OK + value on agreement, MISMATCH + both
                 \\                     values (exit 1) on divergence.
+                \\  --backend=<name>   Select evaluation backend: tree_walk, vm, or wasmgc
+                \\                     (overrides compile-time default).
                 \\  --version          Print the version (ClojureWasm v<version> (<build-mode>[, wasm])) and exit.
                 \\  -h, --help         Show this help.
                 \\
@@ -365,6 +368,15 @@ fn dispatchArgsRest(
             return;
         } else if (std.mem.eql(u8, arg, "--compare")) {
             compare_mode = true;
+        } else if (std.mem.startsWith(u8, arg, "--backend=")) {
+            backend_override = arg["--backend=".len..];
+            if (!std.mem.eql(u8, backend_override.?, "tree_walk") and
+                !std.mem.eql(u8, backend_override.?, "vm") and
+                !std.mem.eql(u8, backend_override.?, "wasmgc")) {
+                try stderr.print("Error: --backend must be tree_walk, vm, or wasmgc\n", .{});
+                try stderr.flush();
+                std.process.exit(1);
+            }
         } else if (std.mem.eql(u8, arg, "-cp") or std.mem.eql(u8, arg, "--classpath")) {
             classpath_arg = args.next() orelse {
                 try stderr.print("Error: -cp / --classpath requires an argument\n", .{});
@@ -469,7 +481,7 @@ fn dispatchArgsRest(
     if (compare_mode) {
         try runner.runSourceCompare(io, gpa, arena, stdout, stderr, source_text.?, source_label);
     } else {
-        try runner.runSource(io, gpa, arena, stdout, stderr, source_text.?, source_label, deps.load_paths, print_results, fs_jail_root);
+        try runner.runSource(io, gpa, arena, stdout, stderr, source_text.?, source_label, deps.load_paths, print_results, fs_jail_root, backend_override);
     }
 }
 

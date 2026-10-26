@@ -65,11 +65,11 @@ pub const WatTypeGen = struct {
 
     /// Generate core $Value type definition in WAT.
     ///
-    /// Spec: Tagged union with $tag (i32) + $data (ref null $ValueData)
+    /// Spec: Tagged union with $tag (i32) + $data (ref null any)
     /// Output:
     ///   (type $Value (struct
     ///     (field $tag i32)
-    ///     (field $data (ref null $ValueData))
+    ///     (field $data (ref null any))
     ///   ))
     pub fn emitValueType(self: *WatTypeGen) ![]const u8 {
         _ = self;
@@ -77,7 +77,7 @@ pub const WatTypeGen = struct {
             \\;; Core Clojure Value type (tagged union)
             \\(type $Value (struct
             \\  (field $tag i32)        ;; TypeTag: 0=nil, 1=boolean, ..., 10=set
-            \\  (field $data (ref null $ValueData))
+            \\  (field $data (ref null any))
             \\))
         ;
     }
@@ -94,8 +94,9 @@ pub const WatTypeGen = struct {
         _ = self;
         return
             \\;; Clojure String
+            \\(type $ByteArray (array (mut i8)))
             \\(type $String (struct
-            \\  (field $bytes (array (mut i8)))
+            \\  (field $bytes (ref $ByteArray))
             \\  (field $hash i32)
             \\))
         ;
@@ -145,32 +146,11 @@ pub const WatTypeGen = struct {
 
     /// Generate $ValueData union definition in WAT.
     ///
-    /// Spec: Union of all value payload types
-    /// Output:
-    ///   (type $ValueData (union
-    ///     (field $nil (struct))
-    ///     (field $boolean i32)
-    ///     ...
-    ///   ))
+    /// NOTE: WasmGC doesn't support union types. We use (ref null any) instead.
+    /// This function returns empty string - the Value struct uses (ref null any) directly.
     pub fn emitValueDataUnion(self: *WatTypeGen) ![]const u8 {
         _ = self;
-        return
-            \\;; Tagged union for value payloads
-            \\(type $ValueData (union
-            \\  (field $nil (struct))
-            \\  (field $boolean i32)
-            \\  (field $long i64)
-            \\  (field $double f64)
-            \\  (field $string (ref $String))
-            \\  (field $symbol (ref $Symbol))
-            \\  (field $keyword (ref $Keyword))
-            \\  (field $list (ref $List))
-            \\  (field $vector (ref $Vector))
-            \\  (field $map (ref $Map))
-            \\  (field $set (ref $Set))
-            \\  (field $function (ref $Function))
-            \\))
-        ;
+        return "";
     }
 
     /// Generate $List type definition in WAT.
@@ -207,9 +187,10 @@ pub const WatTypeGen = struct {
         _ = self;
         return
             \\;; Persistent vector (RRB-tree simplified)
+            \\(type $ValueArray (array (ref null $Value)))
             \\(type $Vector (struct
             \\  (field $root (ref null $VectorNode))
-            \\  (field $tail (array (ref null $Value)))
+            \\  (field $tail (ref $ValueArray))
             \\  (field $count i32)
             \\))
         ;
@@ -222,8 +203,9 @@ pub const WatTypeGen = struct {
         _ = self;
         return
             \\;; Vector internal node
+            \\(type $AnyArray (array (ref null any)))
             \\(type $VectorNode (struct
-            \\  (field $children (array (ref null any)))
+            \\  (field $children (ref $AnyArray))
             \\))
         ;
     }
@@ -256,7 +238,7 @@ pub const WatTypeGen = struct {
             \\;; Map internal HAMT node
             \\(type $MapNode (struct
             \\  (field $bitmap i32)
-            \\  (field $children (array (ref null any)))
+            \\  (field $children (ref $AnyArray))
             \\))
         ;
     }
@@ -285,9 +267,10 @@ pub const WatTypeGen = struct {
         _ = self;
         return
             \\;; First-class function (closure)
+            \\(type $CaptureArray (array (ref $Value)))
             \\(type $Function (struct
             \\  (field $func_index i32)           ;; Index in function table
-            \\  (field $captures (ref null (array (ref $Value))))  ;; Captured variables
+            \\  (field $captures (ref null $CaptureArray))  ;; Captured variables
             \\  (field $arity i32)                ;; Parameter count
             \\))
         ;
