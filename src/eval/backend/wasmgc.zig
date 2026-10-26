@@ -254,60 +254,52 @@ pub const Compiler = struct {
 
 /// Execute compiled WAT code and return the result (Option A).
 /// Flow: WAT → wasm-tools → WASM binary → zwasm → execute → Value
+/// Based on zwasm v2 embedding API (docs/examples/zig_host/hello.zig)
 pub fn executeWat(rt: *Runtime, env: anytype, arena: std.mem.Allocator, wat_code: []const u8) !@import("../../runtime/value/value.zig").Value {
     _ = env;
+    _ = rt;
     const ValueType = @import("../../runtime/value/value.zig").Value;
     const zwasm = @import("zwasm");
 
-    // Step 1: Write WAT to temp file
+    // Step 1: Write WAT to temp file using standard Zig API
     const tmp_wat = "/tmp/cljw_wasmgc.wat";
     {
-        const file = try std.Io.Dir.cwd().createFile(rt.io, tmp_wat, .{});
-        defer file.close(rt.io);
-        var buf: [4096]u8 = undefined;
-        var w = file.writer(rt.io, &buf);
-        try w.interface.writeAll(wat_code);
-        try w.flush();
+        const file = try std.fs.cwd().createFile(tmp_wat, .{});
+        defer file.close();
+        try file.writeAll(wat_code);
     }
 
-    // Step 2: Convert WAT → WASM with wasm-tools
+    // Step 2: Convert WAT → WASM with wasm-tools (shell command)
     const tmp_wasm = "/tmp/cljw_wasmgc.wasm";
-    const convert = try std.process.Child.run(.{
+    const result = try std.process.Child.run(.{
         .allocator = arena,
         .argv = &[_][]const u8{ "wasm-tools", "parse", tmp_wat, "-o", tmp_wasm },
     });
-    defer arena.free(convert.stdout);
-    defer arena.free(convert.stderr);
+    defer arena.free(result.stdout);
+    defer arena.free(result.stderr);
+    if (result.term.Exited != 0) return error.WasmConversionFailed;
 
-    if (convert.term.Exited != 0) return error.WasmConversionFailed;
-
-    // Step 3: Load WASM with zwasm
-    const wasm_bytes = try std.fs.readFileAlloc(arena, tmp_wasm, 1024 * 1024);
+    // Step 3: Read WASM binary
+    const wasm_bytes = try std.fs.cwd().readFileAlloc(arena, tmp_wasm, 10 * 1024 * 1024);
     defer arena.free(wasm_bytes);
 
-    var engine = try zwasm.Engine.init(arena);
-    defer engine.deinit();
+    // Step 4: Execute with zwasm (v2 API from docs/examples/zig_host/hello.zig)
+    var eng = try zwasm.Engine.init(arena, .{});
+    defer eng.deinit();
+    var mod = try eng.compile(wasm_bytes);
+    defer mod.deinit();
+    var inst = try mod.instantiate(.{});
+    defer inst.deinit();
 
-    var module = try zwasm.Module.init(&engine, wasm_bytes);
-    defer module.deinit();
+    // Step 5: Call "main" function and convert result to Value
+    const MainFn = fn () i64;
+    const main_fn = inst.typedFunc(MainFn, "main");
+    const result_i64 = try main_fn.call(.{});
 
-    var instance = try zwasm.Instance.init(&module, .{});
-    defer instance.deinit();
+    // Convert i64 → ClojureWasm Value
+    return ValueType.makeInteger(@intCast(result_i64));
+}
 
-    // Step 4: Call exported "main" function
-    const result = try instance.call("main", &[_]zwasm.Value{}, arena);
-    defer if (result) |r| arena.free(r);
-
-    // Step 5: Convert zwasm result to ClojureWasm Value
-    if (result) |values| {
-        if (values.len == 0) return ValueType.nil_val;
-        const val = values[0];
-        return switch (val) {
-            .i64 => |i| @import("../../runtime/value/value.zig").makeInteger(rt, i),
-            .f64 => |f| @import("../../runtime/value/value.zig").makeFloat(rt, f),
-            else => ValueType.nil_val,
-        };
-    }
 
     return ValueType.nil_val;
 }
