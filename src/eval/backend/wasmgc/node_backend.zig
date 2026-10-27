@@ -33,6 +33,11 @@ const vector_collection = @import("../../../runtime/collection/vector.zig");
 const map_collection = @import("../../../runtime/collection/map.zig");
 const set_collection = @import("../../../runtime/collection/set.zig");
 const error_catalog = @import("../../../runtime/error/catalog.zig");
+const root_set = @import("../../../runtime/gc/root_set.zig");
+
+/// Fixed handle-table capacity: the table's buffer address must stay stable
+/// because it is published to the GC as a root frame.
+const HANDLE_CAP: usize = 32768;
 
 pub const MAX_CALL_ARGS = 7;
 
@@ -138,9 +143,9 @@ const Compiler = struct {
                 const idxs = try self.arena.alloc(u16, l.bindings.len);
                 for (l.bindings, 0..) |b, k| idxs[k] = b.index;
                 try self.loops.append(self.arena, .{ .id = id, .indices = idxs });
-                try self.emit("(loop $L{d} (result i32)\n", .{id});
+                try self.emit("(call $loop_mark)\n(loop $L{d} (result i32)\n", .{id});
                 try self.expr(l.body);
-                try self.emit(")\n", .{});
+                try self.emit(")\n(call $loop_end)\n", .{});
                 _ = self.loops.pop();
             },
             .recur_node => |r| {
@@ -153,7 +158,7 @@ const Compiler = struct {
                     k -= 1;
                     try self.emit("(i32.const {d})\n(call $local_set)\n", .{lf.indices[k]});
                 }
-                try self.emit("(br $L{d})\n(i32.const 0)\n", .{lf.id});
+                try self.emit("(call $loop_reset)\n(br $L{d})\n(i32.const 0)\n", .{lf.id});
             },
             .call_node => |c| {
                 if (c.args.len > MAX_CALL_ARGS) return self.hostEval(n);
@@ -310,13 +315,24 @@ const Compiler = struct {
         const lid = self.next_label;
         self.next_label += 1;
         try self.loops.append(self.arena, .{ .id = lid, .indices = idxs });
-        try self.emit("(func $m{d} (export \"m{d}\") (result i32)\n(loop $L{d} (result i32)\n", .{ id, id, lid });
+        try self.emit("(func $m{d} (export \"m{d}\") (result i32)\n(call $loop_mark)\n(loop $L{d} (result i32)\n", .{ id, id, lid });
         try self.expr(m.body);
-        try self.emit("))\n", .{});
+        try self.emit(")\n(call $loop_end)\n)\n", .{});
         try self.funcs.appendSlice(self.arena, self.out.items);
         return id;
     }
 };
+
+threadlocal var tl_marker: u8 = 0;
+threadlocal var tl_clones: std.AutoHashMapUnmanaged(*State, *State) = .empty;
+var inst_lock = std.atomic.Value(bool).init(false);
+
+fn lockInst() void {
+    while (inst_lock.cmpxchgWeak(false, true, .acquire, .monotonic) != null) std.atomic.spinLoopHint();
+}
+fn unlockInst() void {
+    inst_lock.store(false, .release);
+}
 
 /// Runtime state shared with the host imports (zwasm `Caller.data`).
 /// Heap-allocated and never freed when the module defined functions, because
@@ -335,6 +351,53 @@ const State = struct {
     inst: *zwasm.Instance = undefined,
     gpa: std.mem.Allocator,
     err: ?anyerror = null,
+    /// Mirror of `handles.items.len` for the GC root frame (`EvalFrame.sp`).
+    hlen: u16 = 0,
+    /// Handle-table high-water marks of the enclosing loops (see `loop_mark`).
+    marks: std.ArrayList(u32) = .empty,
+    /// Thread that owns this State (address of its threadlocal marker); the
+    /// root State is shared by every thread, each running its own clone/instance.
+    owner: *const u8 = undefined,
+    root: *State = undefined,
+    eng: *zwasm.Engine = undefined,
+    mod: *zwasm.Module = undefined,
+    consts: []const Value = &.{},
+
+    /// The State to run on for the calling thread: a zwasm instance is not
+    /// re-entrant across threads, so each thread lazily gets its own
+    /// instance of the shared compiled module (all language state is
+    /// host-side, so a fresh instance is semantically identical).
+    fn forThread(self: *State) !*State {
+        const me: *const u8 = &tl_marker;
+        if (self.owner == me) return self;
+        const root = self.root;
+        if (root.owner == me) return root;
+        const gop = try tl_clones.getOrPut(std.heap.page_allocator, root);
+        if (gop.found_existing) return gop.value_ptr.*;
+        errdefer _ = tl_clones.remove(root);
+        const gpa = std.heap.page_allocator;
+        const c = try gpa.create(State);
+        c.* = root.*;
+        c.handles = .empty;
+        c.builders = .empty;
+        c.marks = .empty;
+        c.hlen = 0;
+        c.err = null;
+        c.owner = me;
+        try c.handles.ensureTotalCapacity(gpa, HANDLE_CAP);
+        c.handles.appendSliceAssumeCapacity(root.consts);
+        c.hlen = @intCast(root.consts.len);
+        lockInst();
+        defer unlockInst();
+        const linker = try gpa.create(zwasm.Linker);
+        linker.* = zwasm.Linker.init(root.eng);
+        try defineImports(linker, c);
+        const inst = try gpa.create(zwasm.Instance);
+        inst.* = try linker.instantiate(root.mod, .{});
+        c.inst = inst;
+        gop.value_ptr.* = c;
+        return c;
+    }
 
     fn methodBody(self: *State, id: u32) !*const tree_walk.NativeBody {
         const ref = try self.gpa.create(MethodRef);
@@ -348,8 +411,15 @@ const State = struct {
 
     fn push(self: *State, v: Value) !i32 {
         const idx = self.handles.items.len;
-        try self.handles.append(self.gpa, v);
+        if (idx >= HANDLE_CAP) return error.WasmgcHandleOverflow;
+        self.handles.appendAssumeCapacity(v);
+        self.hlen = @intCast(idx + 1);
         return @intCast(idx);
+    }
+
+    fn truncate(self: *State, len: usize) void {
+        self.handles.shrinkRetainingCapacity(len);
+        self.hlen = @intCast(len);
     }
 
     /// Stash the real error; zwasm only accepts its own trap variants from a
@@ -374,6 +444,19 @@ const Caller = zwasm.Caller;
 const Builder = struct { kind: u32, items: std.ArrayList(Value) };
 
 const env_mod = @import("../../../runtime/env.zig");
+
+fn hLoopMark(c: *Caller) anyerror!void {
+    const s = c.data(State);
+    try s.marks.append(s.gpa, @intCast(s.handles.items.len));
+}
+fn hLoopReset(c: *Caller) anyerror!void {
+    const s = c.data(State);
+    s.truncate(s.marks.items[s.marks.items.len - 1]);
+}
+fn hLoopEnd(c: *Caller) anyerror!void {
+    const s = c.data(State);
+    _ = s.marks.pop();
+}
 
 fn hLetfnPatch(c: *Caller, base: i32, count: i32) anyerror!void {
     const s = c.data(State);
@@ -424,6 +507,8 @@ fn hBinding(c: *Caller, idx: i32) anyerror!i32 {
     const info = s.bindings[@intCast(idx)];
     const n = info.node;
     const rt = s.rt;
+    const marks_base = s.marks.items.len;
+    defer s.marks.shrinkRetainingCapacity(marks_base);
     var frame: env_mod.BindingFrame = .{};
     defer frame.bindings.deinit(rt.gpa);
     for (n.pairs, 0..) |pair, i| {
@@ -484,6 +569,8 @@ fn hThrow(c: *Caller, h: i32) anyerror!i32 {
 /// Port of TreeWalk `evalTry` (same catch/finally/uncatchable semantics) with
 /// each sub-body run as a WASM thunk.
 fn tryImpl(s: *State, info: TryInfo) anyerror!Value {
+    const marks_base = s.marks.items.len;
+    defer s.marks.shrinkRetainingCapacity(marks_base);
     const n = info.node;
     if (callThunk(s, info.body_id)) |result| {
         if (info.finally_id) |f| _ = try callThunk(s, f);
@@ -592,16 +679,22 @@ const MethodRef = struct {
 fn runMethod(ctx: *anyopaque, rt: *Runtime, env: *Env, locals: []Value) anyerror!Value {
     _ = rt;
     const ref: *MethodRef = @ptrCast(@alignCast(ctx));
-    const s = ref.state;
+    const s = try ref.state.forThread();
     const saved_locals = s.locals;
     const saved_env = s.env;
     const base = s.handles.items.len;
+    const marks_base = s.marks.items.len;
     s.locals = locals;
     s.env = env;
+    // Publish the handle table to the GC for the activation's extent.
+    var gf: root_set.EvalFrame = .{ .stack = s.handles.items.ptr, .sp = &s.hlen, .locals = &.{}, .parent = root_set.eval_frame_head };
+    root_set.eval_frame_head = &gf;
     defer {
+        root_set.eval_frame_head = gf.parent;
         s.locals = saved_locals;
         s.env = saved_env;
-        s.handles.shrinkRetainingCapacity(base);
+        s.truncate(base);
+        s.marks.shrinkRetainingCapacity(marks_base);
     }
     const MainFn = fn () i32;
     const h = s.inst.typedFunc(MainFn, ref.export_name).call(.{}) catch |e| {
@@ -698,6 +791,9 @@ const prelude =
     \\(import "h" "apply" (func $apply (param i32) (result i32)))
     \\(import "h" "binding" (func $binding (param i32) (result i32)))
     \\(import "h" "letfn_patch" (func $letfn_patch (param i32 i32)))
+    \\(import "h" "loop_mark" (func $loop_mark))
+    \\(import "h" "loop_reset" (func $loop_reset))
+    \\(import "h" "loop_end" (func $loop_end))
     \\
 ;
 
@@ -718,6 +814,9 @@ fn defineImports(linker: *zwasm.Linker, s: *State) !void {
     try linker.defineFuncCtx("h", "apply", p, fn (*Caller, i32) anyerror!i32, hApply);
     try linker.defineFuncCtx("h", "binding", p, fn (*Caller, i32) anyerror!i32, hBinding);
     try linker.defineFuncCtx("h", "letfn_patch", p, fn (*Caller, i32, i32) anyerror!void, hLetfnPatch);
+    try linker.defineFuncCtx("h", "loop_mark", p, fn (*Caller) anyerror!void, hLoopMark);
+    try linker.defineFuncCtx("h", "loop_reset", p, fn (*Caller) anyerror!void, hLoopReset);
+    try linker.defineFuncCtx("h", "loop_end", p, fn (*Caller) anyerror!void, hLoopEnd);
     try linker.defineFuncCtx("h", "call0", p, fn (*Caller, i32) anyerror!i32, hCall0);
     try linker.defineFuncCtx("h", "call1", p, fn (*Caller, i32, i32) anyerror!i32, hCall1);
     try linker.defineFuncCtx("h", "call2", p, fn (*Caller, i32, i32, i32) anyerror!i32, hCall2);
@@ -788,7 +887,10 @@ pub fn evalNode(
         .bindings = try gpa.dupe(BindInfo, comp.bindings.items),
         .gpa = gpa,
     };
-    try state.handles.appendSlice(gpa, comp.consts.items);
+    if (comp.consts.items.len + 1024 > HANDLE_CAP) return error.WasmgcHandleOverflow;
+    try state.handles.ensureTotalCapacity(gpa, HANDLE_CAP);
+    state.handles.appendSliceAssumeCapacity(comp.consts.items);
+    state.hlen = @intCast(comp.consts.items.len);
 
     // Engine/module/instance stay alive: functions created by this form keep
     // calling back into them after the form returns.
@@ -802,8 +904,16 @@ pub fn evalNode(
     const inst = try gpa.create(zwasm.Instance);
     inst.* = try linker.instantiate(mod, .{});
     state.inst = inst;
+    state.root = state;
+    state.owner = &tl_marker;
+    state.eng = eng;
+    state.mod = mod;
+    state.consts = try gpa.dupe(Value, comp.consts.items);
 
     const MainFn = fn () i32;
+    var gf: root_set.EvalFrame = .{ .stack = state.handles.items.ptr, .sp = &state.hlen, .locals = &.{}, .parent = root_set.eval_frame_head };
+    root_set.eval_frame_head = &gf;
+    defer root_set.eval_frame_head = gf.parent;
     const main_fn = inst.typedFunc(MainFn, "__repl_expr");
     const h = main_fn.call(.{}) catch |e| return state.err orelse e;
     return state.handles.items[@intCast(h)];

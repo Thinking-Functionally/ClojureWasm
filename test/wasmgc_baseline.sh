@@ -10,17 +10,20 @@
 # (which would silently make later scripts pass on the wrong backend), and the
 # repo's own zig-out is never touched. A sanity check asserts the binary under
 # test really is the wasmgc one.
-# Results: /tmp/wasmgc_baseline/{summary.tsv,<script>.log}
+# Results: /tmp/${BACKEND}_baseline/{summary.tsv,<script>.log}
+# BACKEND=vm|tree_walk|wasmgc (default wasmgc) selects the backend under test,
+# so the same scripts can be run on each backend and diffed.
 set -uo pipefail
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 FILTER="${1:-}"
-OUT=/tmp/wasmgc_baseline
+BACKEND="${BACKEND:-wasmgc}"
+OUT="/tmp/${BACKEND}_baseline"
 SANDBOX="$OUT/root"
 TMO="${WASMGC_TEST_TIMEOUT:-30}"
 rm -rf "$OUT"; mkdir -p "$OUT" "$SANDBOX/zig-out/bin"
 cd "$REPO"
 
-zig build -Dbackend=wasmgc -Dwasm -Doptimize="${CLJW_OPT:-ReleaseSafe}" \
+zig build -Dbackend="$BACKEND" -Dwasm -Doptimize="${CLJW_OPT:-ReleaseSafe}" \
   --prefix "$OUT/prefix" >"$OUT/build.log" 2>&1 \
   || { echo "wasmgc build failed, see $OUT/build.log" >&2; exit 2; }
 
