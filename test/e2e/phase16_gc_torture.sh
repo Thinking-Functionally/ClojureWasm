@@ -46,7 +46,11 @@ assert_eq 'nested_deep'  "$("$BIN" -e '(do (defn dp [n] (if (zero? n) (reduce + 
 # mid-recursion → `(first v)` after the call reads freed memory (the O-005 UAF
 # class, now for the shared-arena locals). fib proves nothing here (fixnum-only).
 # dp(n) = (first [n n n]) + dp(n-1) = n + dp(n-1) = sum(1..200) = 20100.
-assert_eq 'frame_local_alloc' "$("$BIN" -e '(do (defn dp [n] (if (zero? n) 0 (let [v [n n n]] (+ (first v) (dp (dec n)))))) (dp 200))')" '20100'
+dp_n=200; dp_want=20100
+# wasmgc recurses ~36 KB of native stack per call level (zwasm interpreter), so
+# the 6 MiB budget allows ~170 levels; sum(1..120) = 7260.
+"$BIN" --version | grep -q wasmgc && { dp_n=120; dp_want=7260; }
+assert_eq 'frame_local_alloc' "$("$BIN" -e "(do (defn dp [n] (if (zero? n) 0 (let [v [n n n]] (+ (first v) (dp (dec n)))))) (dp $dp_n))")" "$dp_want"
 assert_eq 'sqrt'         "$("$BIN" -e '(do (require (quote [clojure.math])) (clojure.math/sqrt 16))')" '4.0'
 assert_eq 'filter_count' "$("$BIN" -e '(count (filter even? (range 1 200)))')"                 '99'
 # closure capturing a GC vector — exercises the .fn_val closure_bindings trace.

@@ -34,10 +34,27 @@ const map_collection = @import("../../../runtime/collection/map.zig");
 const set_collection = @import("../../../runtime/collection/set.zig");
 const error_catalog = @import("../../../runtime/error/catalog.zig");
 const root_set = @import("../../../runtime/gc/root_set.zig");
+const eval_budget_mod = @import("../../../runtime/concurrency/eval_budget.zig");
+
+/// Map zwasm's own resource traps onto the Clojure errors TreeWalk/VM raise.
+fn realError(s: *State, e: anyerror) anyerror {
+    const real = s.err orelse e;
+    s.err = null;
+    if (real == error.CallStackExhausted)
+        return error_catalog.raise(.stack_overflow, .{}, .{ .max = STACK_BUDGET_BYTES });
+    return real;
+}
 
 /// Fixed handle-table capacity: the table's buffer address must stay stable
 /// because it is published to the GC as a root frame.
 const HANDLE_CAP: usize = 32768;
+
+/// zwasm caps one instance at 256 wasm frames; continue on a fresh instance
+/// well before that (an activation can use a few frames: method + thunks).
+const MAX_WASM_DEPTH: u32 = 100;
+
+/// Native-stack budget for Clojure recursion (same value as TreeWalk's).
+const STACK_BUDGET_BYTES: usize = 6 * 1024 * 1024;
 
 pub const MAX_CALL_ARGS = 7;
 
@@ -161,10 +178,20 @@ const Compiler = struct {
                 try self.emit("(call $loop_reset)\n(br $L{d})\n(i32.const 0)\n", .{lf.id});
             },
             .call_node => |c| {
-                if (c.args.len > MAX_CALL_ARGS) return self.hostEval(n);
                 try self.expr(c.callee);
+                const idx = self.nodes.items.len;
+                try self.nodes.append(self.arena, n);
+                if (c.args.len > MAX_CALL_ARGS) {
+                    try self.emit("(call $lit_begin (i32.const 3))\n", .{});
+                    for (c.args) |*a| {
+                        try self.expr(a);
+                        try self.emit("(call $lit_add)\n", .{});
+                    }
+                    try self.emit("(i32.const {d})\n(call $callv)\n", .{idx});
+                    return;
+                }
                 for (c.args) |*a| try self.expr(a);
-                try self.emit("(call $call{d})\n", .{c.args.len});
+                try self.emit("(i32.const {d})\n(call $call{d})\n", .{ idx, c.args.len });
             },
             .fn_node => |f| try self.compileFn(n, f),
             .throw_node => |t| {
@@ -355,6 +382,10 @@ const State = struct {
     hlen: u16 = 0,
     /// Handle-table high-water marks of the enclosing loops (see `loop_mark`).
     marks: std.ArrayList(u32) = .empty,
+    /// Live activations on this instance, and the continuation instance used
+    /// once `depth` reaches MAX_WASM_DEPTH.
+    depth: u32 = 0,
+    next: ?*State = null,
     /// Thread that owns this State (address of its threadlocal marker); the
     /// root State is shared by every thread, each running its own clone/instance.
     owner: *const u8 = undefined,
@@ -375,6 +406,21 @@ const State = struct {
         const gop = try tl_clones.getOrPut(std.heap.page_allocator, root);
         if (gop.found_existing) return gop.value_ptr.*;
         errdefer _ = tl_clones.remove(root);
+        const c = try cloneState(root, me);
+        gop.value_ptr.* = c;
+        return c;
+    }
+
+    /// Continuation State for activations deeper than one zwasm instance can
+    /// hold (zwasm caps an instance at 256 wasm frames).
+    fn child(self: *State) !*State {
+        if (self.next) |n| return n;
+        const c = try cloneState(self.root, self.owner);
+        self.next = c;
+        return c;
+    }
+
+    fn cloneState(root: *State, me: *const u8) !*State {
         const gpa = std.heap.page_allocator;
         const c = try gpa.create(State);
         c.* = root.*;
@@ -383,6 +429,8 @@ const State = struct {
         c.marks = .empty;
         c.hlen = 0;
         c.err = null;
+        c.depth = 0;
+        c.next = null;
         c.owner = me;
         try c.handles.ensureTotalCapacity(gpa, HANDLE_CAP);
         c.handles.appendSliceAssumeCapacity(root.consts);
@@ -395,7 +443,6 @@ const State = struct {
         const inst = try gpa.create(zwasm.Instance);
         inst.* = try linker.instantiate(root.mod, .{});
         c.inst = inst;
-        gop.value_ptr.* = c;
         return c;
     }
 
@@ -429,12 +476,23 @@ const State = struct {
         return error.HostTrap;
     }
 
-    fn doCall(self: *State, f: i32, hs: []const i32) anyerror!i32 {
+    fn doCall(self: *State, f: i32, hs: []const i32, node_idx: i32) anyerror!i32 {
         var args: [MAX_CALL_ARGS]Value = undefined;
         for (hs, 0..) |h, i| args[i] = self.handles.items[@intCast(h)];
-        const callee = self.handles.items[@intCast(f)];
+        return self.doCallV(self.handles.items[@intCast(f)], args[0..hs.len], node_idx);
+    }
+
+    /// Dispatch with the call node's location and per-argument locations
+    /// (arg-precise error carets), mirroring TreeWalk's `evalCall`.
+    fn doCallV(self: *State, callee: Value, args: []const Value, node_idx: i32) anyerror!i32 {
         const vt = self.rt.vtable orelse return self.fail(error.WasmgcNoVtable);
-        const r = vt.callFn(self.rt, self.env, callee, args[0..hs.len], .{}) catch |e| return self.fail(e);
+        const cn = self.nodes[@intCast(node_idx)].call_node;
+        var arg_locs: [64]error_mod.SourceLocation = undefined;
+        const nl = @min(cn.args.len, arg_locs.len);
+        for (cn.args[0..nl], 0..) |*a, i| arg_locs[i] = a.loc();
+        const prev = error_mod.swapArgSources(arg_locs[0..nl]);
+        defer _ = error_mod.swapArgSources(prev);
+        const r = vt.callFn(self.rt, self.env, callee, args, cn.loc) catch |e| return self.fail(e);
         return self.push(r) catch |e| self.fail(e);
     }
 };
@@ -451,6 +509,8 @@ fn hLoopMark(c: *Caller) anyerror!void {
 }
 fn hLoopReset(c: *Caller) anyerror!void {
     const s = c.data(State);
+    // Back-edge: charge the in-process eval budget (parity with VM/TreeWalk).
+    if (eval_budget_mod.current) |b| b.tick(s.rt.io) catch |e| return s.fail(e);
     s.truncate(s.marks.items[s.marks.items.len - 1]);
 }
 fn hLoopEnd(c: *Caller) anyerror!void {
@@ -536,11 +596,7 @@ fn callThunk(s: *State, id: u32) anyerror!Value {
     var buf: [16]u8 = undefined;
     const name = std.fmt.bufPrint(&buf, "m{d}", .{id}) catch unreachable;
     const MainFn = fn () i32;
-    const h = s.inst.typedFunc(MainFn, name).call(.{}) catch |e| {
-        const real = s.err orelse e;
-        s.err = null;
-        return real;
-    };
+    const h = s.inst.typedFunc(MainFn, name).call(.{}) catch |e| return realError(s, e);
     return s.handles.items[@intCast(h)];
 }
 
@@ -679,7 +735,20 @@ const MethodRef = struct {
 fn runMethod(ctx: *anyopaque, rt: *Runtime, env: *Env, locals: []Value) anyerror!Value {
     _ = rt;
     const ref: *MethodRef = @ptrCast(@alignCast(ctx));
-    const s = try ref.state.forThread();
+    // Same native-stack budget TreeWalk enforces: a catchable StackOverflowError
+    // instead of a segfault on runaway recursion.
+    {
+        const sp = @frameAddress();
+        if (root_set.conservative_stack_top == 0 or sp > root_set.conservative_stack_top) {
+            root_set.conservative_stack_top = sp;
+        } else if (root_set.conservative_stack_top - sp > STACK_BUDGET_BYTES) {
+            return error_catalog.raise(.stack_overflow, .{}, .{ .max = STACK_BUDGET_BYTES });
+        }
+    }
+    var s = try ref.state.forThread();
+    while (s.depth >= MAX_WASM_DEPTH) s = try s.child();
+    s.depth += 1;
+    defer s.depth -= 1;
     const saved_locals = s.locals;
     const saved_env = s.env;
     const base = s.handles.items.len;
@@ -697,11 +766,7 @@ fn runMethod(ctx: *anyopaque, rt: *Runtime, env: *Env, locals: []Value) anyerror
         s.marks.shrinkRetainingCapacity(marks_base);
     }
     const MainFn = fn () i32;
-    const h = s.inst.typedFunc(MainFn, ref.export_name).call(.{}) catch |e| {
-        const real = s.err orelse e;
-        s.err = null;
-        return real;
-    };
+    const h = s.inst.typedFunc(MainFn, ref.export_name).call(.{}) catch |e| return realError(s, e);
     return s.handles.items[@intCast(h)];
 }
 
@@ -741,29 +806,36 @@ fn hEval(c: *Caller, node_idx: i32) anyerror!i32 {
     const v = tree_walk.eval(s.rt, s.env, s.locals, s.nodes[@intCast(node_idx)]) catch |e| return s.fail(e);
     return s.push(v) catch |e| s.fail(e);
 }
-fn hCall0(c: *Caller, f: i32) anyerror!i32 {
-    return c.data(State).doCall(f, &.{});
+/// Call with an unbounded argument count: arguments collected in a builder.
+fn hCallV(c: *Caller, f: i32, node_idx: i32) anyerror!i32 {
+    const s = c.data(State);
+    var b = s.builders.pop().?;
+    defer b.items.deinit(s.gpa);
+    return s.doCallV(s.handles.items[@intCast(f)], b.items.items, node_idx);
 }
-fn hCall1(c: *Caller, f: i32, a: i32) anyerror!i32 {
-    return c.data(State).doCall(f, &.{a});
+fn hCall0(c: *Caller, f: i32, n: i32) anyerror!i32 {
+    return c.data(State).doCall(f, &.{}, n);
 }
-fn hCall2(c: *Caller, f: i32, a: i32, b: i32) anyerror!i32 {
-    return c.data(State).doCall(f, &.{ a, b });
+fn hCall1(c: *Caller, f: i32, a: i32, n: i32) anyerror!i32 {
+    return c.data(State).doCall(f, &.{a}, n);
 }
-fn hCall3(c: *Caller, f: i32, a: i32, b: i32, d: i32) anyerror!i32 {
-    return c.data(State).doCall(f, &.{ a, b, d });
+fn hCall2(c: *Caller, f: i32, a: i32, b: i32, n: i32) anyerror!i32 {
+    return c.data(State).doCall(f, &.{ a, b }, n);
 }
-fn hCall4(c: *Caller, f: i32, a: i32, b: i32, d: i32, e: i32) anyerror!i32 {
-    return c.data(State).doCall(f, &.{ a, b, d, e });
+fn hCall3(c: *Caller, f: i32, a: i32, b: i32, d: i32, n: i32) anyerror!i32 {
+    return c.data(State).doCall(f, &.{ a, b, d }, n);
 }
-fn hCall5(c: *Caller, f: i32, a: i32, b: i32, d: i32, e: i32, g: i32) anyerror!i32 {
-    return c.data(State).doCall(f, &.{ a, b, d, e, g });
+fn hCall4(c: *Caller, f: i32, a: i32, b: i32, d: i32, e: i32, n: i32) anyerror!i32 {
+    return c.data(State).doCall(f, &.{ a, b, d, e }, n);
 }
-fn hCall6(c: *Caller, f: i32, a: i32, b: i32, d: i32, e: i32, g: i32, i: i32) anyerror!i32 {
-    return c.data(State).doCall(f, &.{ a, b, d, e, g, i });
+fn hCall5(c: *Caller, f: i32, a: i32, b: i32, d: i32, e: i32, g: i32, n: i32) anyerror!i32 {
+    return c.data(State).doCall(f, &.{ a, b, d, e, g }, n);
 }
-fn hCall7(c: *Caller, f: i32, a: i32, b: i32, d: i32, e: i32, g: i32, i: i32, j: i32) anyerror!i32 {
-    return c.data(State).doCall(f, &.{ a, b, d, e, g, i, j });
+fn hCall6(c: *Caller, f: i32, a: i32, b: i32, d: i32, e: i32, g: i32, i: i32, n: i32) anyerror!i32 {
+    return c.data(State).doCall(f, &.{ a, b, d, e, g, i }, n);
+}
+fn hCall7(c: *Caller, f: i32, a: i32, b: i32, d: i32, e: i32, g: i32, i: i32, j: i32, n: i32) anyerror!i32 {
+    return c.data(State).doCall(f, &.{ a, b, d, e, g, i, j }, n);
 }
 
 const prelude =
@@ -772,14 +844,15 @@ const prelude =
     \\(import "h" "local_set" (func $local_set (param i32 i32)))
     \\(import "h" "truthy" (func $truthy (param i32) (result i32)))
     \\(import "h" "eval" (func $eval (param i32) (result i32)))
-    \\(import "h" "call0" (func $call0 (param i32) (result i32)))
-    \\(import "h" "call1" (func $call1 (param i32 i32) (result i32)))
-    \\(import "h" "call2" (func $call2 (param i32 i32 i32) (result i32)))
-    \\(import "h" "call3" (func $call3 (param i32 i32 i32 i32) (result i32)))
-    \\(import "h" "call4" (func $call4 (param i32 i32 i32 i32 i32) (result i32)))
-    \\(import "h" "call5" (func $call5 (param i32 i32 i32 i32 i32 i32) (result i32)))
-    \\(import "h" "call6" (func $call6 (param i32 i32 i32 i32 i32 i32 i32) (result i32)))
-    \\(import "h" "call7" (func $call7 (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+    \\(import "h" "call0" (func $call0 (param i32 i32) (result i32)))
+    \\(import "h" "call1" (func $call1 (param i32 i32 i32) (result i32)))
+    \\(import "h" "call2" (func $call2 (param i32 i32 i32 i32) (result i32)))
+    \\(import "h" "call3" (func $call3 (param i32 i32 i32 i32 i32) (result i32)))
+    \\(import "h" "call4" (func $call4 (param i32 i32 i32 i32 i32 i32) (result i32)))
+    \\(import "h" "call5" (func $call5 (param i32 i32 i32 i32 i32 i32 i32) (result i32)))
+    \\(import "h" "call6" (func $call6 (param i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+    \\(import "h" "call7" (func $call7 (param i32 i32 i32 i32 i32 i32 i32 i32 i32) (result i32)))
+    \\(import "h" "callv" (func $callv (param i32 i32) (result i32)))
     \\(import "h" "make_fn" (func $make_fn (param i32) (result i32)))
     \\(import "h" "var" (func $var (param i32) (result i32)))
     \\(import "h" "throw" (func $throw (param i32) (result i32)))
@@ -817,14 +890,15 @@ fn defineImports(linker: *zwasm.Linker, s: *State) !void {
     try linker.defineFuncCtx("h", "loop_mark", p, fn (*Caller) anyerror!void, hLoopMark);
     try linker.defineFuncCtx("h", "loop_reset", p, fn (*Caller) anyerror!void, hLoopReset);
     try linker.defineFuncCtx("h", "loop_end", p, fn (*Caller) anyerror!void, hLoopEnd);
-    try linker.defineFuncCtx("h", "call0", p, fn (*Caller, i32) anyerror!i32, hCall0);
-    try linker.defineFuncCtx("h", "call1", p, fn (*Caller, i32, i32) anyerror!i32, hCall1);
-    try linker.defineFuncCtx("h", "call2", p, fn (*Caller, i32, i32, i32) anyerror!i32, hCall2);
-    try linker.defineFuncCtx("h", "call3", p, fn (*Caller, i32, i32, i32, i32) anyerror!i32, hCall3);
-    try linker.defineFuncCtx("h", "call4", p, fn (*Caller, i32, i32, i32, i32, i32) anyerror!i32, hCall4);
-    try linker.defineFuncCtx("h", "call5", p, fn (*Caller, i32, i32, i32, i32, i32, i32) anyerror!i32, hCall5);
-    try linker.defineFuncCtx("h", "call6", p, fn (*Caller, i32, i32, i32, i32, i32, i32, i32) anyerror!i32, hCall6);
-    try linker.defineFuncCtx("h", "call7", p, fn (*Caller, i32, i32, i32, i32, i32, i32, i32, i32) anyerror!i32, hCall7);
+    try linker.defineFuncCtx("h", "call0", p, fn (*Caller, i32, i32) anyerror!i32, hCall0);
+    try linker.defineFuncCtx("h", "call1", p, fn (*Caller, i32, i32, i32) anyerror!i32, hCall1);
+    try linker.defineFuncCtx("h", "call2", p, fn (*Caller, i32, i32, i32, i32) anyerror!i32, hCall2);
+    try linker.defineFuncCtx("h", "call3", p, fn (*Caller, i32, i32, i32, i32, i32) anyerror!i32, hCall3);
+    try linker.defineFuncCtx("h", "call4", p, fn (*Caller, i32, i32, i32, i32, i32, i32) anyerror!i32, hCall4);
+    try linker.defineFuncCtx("h", "call5", p, fn (*Caller, i32, i32, i32, i32, i32, i32, i32) anyerror!i32, hCall5);
+    try linker.defineFuncCtx("h", "call6", p, fn (*Caller, i32, i32, i32, i32, i32, i32, i32, i32) anyerror!i32, hCall6);
+    try linker.defineFuncCtx("h", "call7", p, fn (*Caller, i32, i32, i32, i32, i32, i32, i32, i32, i32) anyerror!i32, hCall7);
+    try linker.defineFuncCtx("h", "callv", p, fn (*Caller, i32, i32) anyerror!i32, hCallV);
 }
 
 /// Compile one top-level `Node` to WAT text. Exposed for diagnostics.
@@ -915,6 +989,6 @@ pub fn evalNode(
     root_set.eval_frame_head = &gf;
     defer root_set.eval_frame_head = gf.parent;
     const main_fn = inst.typedFunc(MainFn, "__repl_expr");
-    const h = main_fn.call(.{}) catch |e| return state.err orelse e;
+    const h = main_fn.call(.{}) catch |e| return realError(state, e);
     return state.handles.items[@intCast(h)];
 }

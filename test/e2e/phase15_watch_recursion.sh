@@ -74,9 +74,12 @@ assert_eq 'reducer_reentry_caught' "$("$BIN" -e "(try $RREC (catch Throwable e :
 # backend-aware (D-555): tree_walk recurses NATIVE frames per Node (~30 KB per
 # HOF step in ReleaseSafe), so 500 deep exceeds the ADR-0157 6 MiB budget
 # PHYSICALLY (pre-guard it was a raw SIGSEGV); 100 stays well under. The vm's
-# flattened frames keep 500 cheap.
+# flattened frames keep 500 cheap. wasmgc recurses natively too (~36 KB per
+# call level through zwasm's interpreter, 2 levels per HOF step), so it gets a
+# smaller depth (a known structural limit of the zwasm-interpreted backend).
 hof_depth=500
 "$BIN" --version | grep -q tree_walk && hof_depth=100
+"$BIN" --version | grep -q wasmgc && hof_depth=50
 assert_eq 'legit_hof_recursion' \
   "$("$BIN" -e "((fn f [n] (if (zero? n) :done (first (map (fn [_] (f (dec n))) [1])))) $hof_depth)")" ':done'
 
@@ -91,6 +94,7 @@ assert_eq 'direct_recursion_thr'    "$("$BIN" -e "(try $DREC (catch Throwable e 
 # 500 grazes the 6 MiB budget; 300 stays well under.
 direct_depth=500
 "$BIN" --version | grep -q tree_walk && direct_depth=300
+"$BIN" --version | grep -q wasmgc && direct_depth=150
 assert_eq 'legit_direct_recursion'  "$("$BIN" -e "((fn f [n] (if (zero? n) :done (f (dec n)))) $direct_depth)")" ':done'
 
 echo ""
