@@ -25,7 +25,7 @@ const Value = value_mod.Value;
 const tree_walk = @import("backend/tree_walk.zig");
 const vm = @import("backend/vm.zig");
 const vm_compiler = @import("backend/vm/compiler.zig");
-const wasmgc = @import("backend/wasmgc.zig");
+const wasmgc = @import("backend/wasmgc/node_backend.zig");
 const serialize = @import("bytecode/serialize.zig");
 const analyzer = @import("analyzer/analyzer.zig");
 const root_set = @import("../runtime/gc/root_set.zig");
@@ -96,10 +96,8 @@ pub fn evalForm(
     const backend_name = rt.backend_override orelse @tagName(build_options.backend);
 
     if (std.mem.eql(u8, backend_name, "wasmgc")) {
-        // WasmGC backend: compile to WAT and execute via WebAssembly runtime
-        var compiler = wasmgc.Compiler.init(arena, rt);
-        const wat_code = try compiler.compile(node);
-        return try wasmgc.executeWat(rt, env, arena, wat_code);
+        // WasmGC backend: compile the Node to WAT and execute via zwasm
+        return try wasmgc.evalNode(rt, env, locals, arena, node);
     } else if (std.mem.eql(u8, backend_name, "vm")) {
         const chunk = try vm_compiler.compile(rt, arena, node);
         return vm.eval(rt, env, locals, &chunk);

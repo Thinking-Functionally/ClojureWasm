@@ -133,6 +133,14 @@ pub const FunctionMethod = struct {
     /// inits + GC-roots only `locals[0..frame_slots]`. Sentinel 0 → full
     /// MAX_LOCALS init (safe fallback for any construction site that doesn't set it).
     frame_slots: u16 = 0,
+    /// WasmGC backend hook: when non-null the method body is a compiled WASM
+    /// function; `run` executes it over the bound `locals` window.
+    native: ?*const NativeBody = null,
+};
+
+pub const NativeBody = struct {
+    ctx: *anyopaque,
+    run: *const fn (ctx: *anyopaque, rt: *Runtime, env: *Env, locals: []Value) anyerror!Value,
 };
 
 pub const Function = struct {
@@ -1473,6 +1481,7 @@ fn callMethodImpl(rt: *Runtime, env: *Env, fn_val: Value, args: []const Value, l
             if (vt.evalChunk) |ec| return ec(rt, env, locals[0..fs], @ptrCast(chunk));
         }
     }
+    if (m.native) |nb| return nb.run(nb.ctx, rt, env, locals[0..fs]);
     // A deserialized (AOT) fn has bytecode but only a sentinel body; it must
     // run via the VM `evalChunk` path above. Reaching the tree_walk body
     // here means a deserialized fn was called on a backend without
