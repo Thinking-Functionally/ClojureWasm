@@ -1,0 +1,109 @@
+;; Three-way differential cases aimed at WasmGC-specific machinery: handle
+;; table, instance chaining, per-thread instances, thunks (try/binding), the
+;; >7-arg call path, call-site error locations. See core_semantics.txt for the
+;; format and scripts/check_backend_diff.sh for the comparison rules.
+
+;; ---- recursion depth (within the wasmgc limit) and runaway recursion
+((fn f [n] (if (zero? n) :done (first (map (fn [_] (f (dec n))) [1])))) 40)
+;;---
+(do (defn h [n] (if (zero? n) 0 (+ 1 (h (dec n))))) (h 100))
+;;---
+(do (defn g [n] (if (zero? n) :done (g (dec n)))) (g 120))
+;;---
+(try ((fn f [n] (+ 1 (f n))) 1) (catch StackOverflowError e :so))
+;;---
+(do (defn r [n] (+ 1 (r n))) (r 1))
+
+;; ---- loops: handle reclamation and GC pressure
+;;---
+(loop [i 0 acc nil] (if (< i 200000) (recur (inc i) (str i)) acc))
+;;---
+(count (loop [i 0 acc []] (if (< i 30000) (recur (inc i) (conj acc (str i))) acc))
+;;---
+(loop [i 0 fs []] (if (< i 3) (recur (inc i) (conj fs (fn [] i))) (mapv (fn [f] (f)) fs)))
+;;---
+(loop [i 0 acc []] (if (< i 3) (recur (inc i) (conj acc (try i (finally nil)))) acc))
+;;---
+(let [x 1 f (fn [] x) x 2] [x (f)])
+
+;; ---- recur forms
+;;---
+((fn ([n] (recur n 0)) ([n acc] (if (zero? n) acc (recur (dec n) (+ acc n))))) 10)
+;;---
+((fn [a & r] (if (seq r) (recur (first r) (rest r)) a)) 1 2 3)
+;;---
+(let [k 3] (letfn [(a [n] (if (zero? n) k (b n))) (b [n] (a (dec n)))] (a 2)))
+
+;; ---- call paths: >7 args, apply, non-fn callees, arity errors
+;;---
+((fn [a b c d e f g h i j] [a j (+ a b c d e f g h i j)]) 1 2 3 4 5 6 7 8 9 10)
+;;---
+(apply + (range 20))
+;;---
+(apply (fn [& xs] (count xs)) (range 50))
+;;---
+((fn [a] a))
+;;---
+((fn [a] a) 1 2)
+;;---
+(1 2)
+;;---
+("s" 1)
+;;---
+[(:a {:a 1}) ({:a 1} :a) (#{1} 1) (#'inc 1) ([5 6] 1)]
+;;---
+(do (defn ^{:doc "d"} foo [] 1) [(:doc (meta #'foo)) (foo)])
+
+;; ---- exceptions through lazy seqs, thunks and nested handlers
+;;---
+(let [s (map (fn [x] (/ 1 x)) [1 0])] (try (doall s) (catch ArithmeticException e :late)))
+;;---
+(try (try (throw (ex-info "a" {:n 1})) (finally (println "cleanup"))) (catch Exception e (ex-data e)))
+;;---
+(let [f (fn [] (try (throw (ex-info "x" {})) (catch Exception e :inner)))] [(f) (f)])
+;;---
+(try (Integer/parseInt "x") (catch NumberFormatException e :nfe))
+;;---
+(try (throw (Error. "custom")) (catch Throwable t (.getMessage t)))
+;;---
+(try (do (def ^:dynamic *e* 1) (binding [*e* 2] (throw (ex-info "in" {:v *e*})))) (catch Exception e [(ex-data e) *e*]))
+
+;; ---- binding, vars, namespaces
+;;---
+(do (def ^:dynamic *c* 1) (binding [*c* 2] @(future *c*)))
+;;---
+(do (def nv 1) (set! nv 2))
+;;---
+(do (in-ns 'zz) (def q 3) [(str (ns-name *ns*)) q])
+;;---
+(do (def ^:dynamic *d* 0) (binding [*d* 1] (let [f (fn [] *d*)] [(f) (binding [*d* 2] (f))])))
+
+;; ---- threads and concurrency
+;;---
+(let [x 5] @(future (+ x 1)))
+;;---
+(let [a (atom 0) ts (doall (for [_ (range 8)] (future (dotimes [_ 100] (swap! a inc)))))] (run! deref ts) @a)
+;;---
+(vec (pmap (fn [x] (* x x)) (range 12)))
+;;---
+(let [l (Object.)] (locking l :locked))
+;;---
+(let [ag (agent 0)] (send ag inc) (await ag) @ag)
+;;---
+(let [p (promise)] (future (deliver p :done)) @p)
+;;---
+(let [r (ref 0)] (dosync (alter r inc)) @r)
+;;---
+(let [f (fn [n] (future (reduce + (range n))))] (mapv deref (mapv f [10 100 1000])))
+
+;; ---- interop and misc
+;;---
+[Integer/MAX_VALUE (.length "abc") (new String "x") (Math/max 3 4)]
+;;---
+(let [sb (StringBuilder.)] (.append sb "a") (.append sb 1) (.toString sb))
+;;---
+(fn? (fn []))
+;;---
+(sort (map (fn [x] (mod x 7)) (range 20)))
+;;---
+(reduce (fn [m x] (update m (mod x 3) (fnil conj []) x)) {} (range 10))

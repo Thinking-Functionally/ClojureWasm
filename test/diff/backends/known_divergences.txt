@@ -1,0 +1,11 @@
+# Accepted divergences for scripts/check_backend_diff.sh: `<file>:<case-number>`.
+# Each is a pre-existing difference between backends, not a regression.
+
+# Runaway recursion: the VM reports its own depth limit ("call depth exceeded
+# 2048"); tree_walk and wasmgc report the 6 MiB native-stack budget. Both raise a
+# catchable StackOverflowError (the catchable case, wasmgc_machinery.txt:4, agrees).
+wasmgc_machinery.txt:5
+
+# set! on a non-thread-bound var: the VM's error header omits the " at <-e>:1:19"
+# source location that tree_walk and wasmgc include. Message text is identical.
+wasmgc_machinery.txt:30

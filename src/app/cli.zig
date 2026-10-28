@@ -383,7 +383,8 @@ fn dispatchArgsRest(
                 arg["--backend=".len..];
             if (!std.mem.eql(u8, backend_override.?, "tree_walk") and
                 !std.mem.eql(u8, backend_override.?, "vm") and
-                !std.mem.eql(u8, backend_override.?, "wasmgc")) {
+                !std.mem.eql(u8, backend_override.?, "wasmgc"))
+            {
                 try stderr.print("Error: --backend must be tree_walk, vm, or wasmgc, got '{s}'\n", .{backend_override.?});
                 try stderr.flush();
                 std.process.exit(1);
