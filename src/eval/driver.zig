@@ -25,7 +25,7 @@ const Value = value_mod.Value;
 const tree_walk = @import("backend/tree_walk.zig");
 const vm = @import("backend/vm.zig");
 const vm_compiler = @import("backend/vm/compiler.zig");
-const wasmgc = @import("backend/wasmgc/node_backend.zig");
+const wasmgc = @import("backend/wasmgc.zig");
 const serialize = @import("bytecode/serialize.zig");
 const analyzer = @import("analyzer/analyzer.zig");
 const root_set = @import("../runtime/gc/root_set.zig");
@@ -74,6 +74,25 @@ pub fn runEnvelope(rt: *Runtime, env: *Env, arena: std.mem.Allocator, payload: [
     }
 }
 
+var env_backend_read: bool = false;
+var env_backend_value: ?[]const u8 = null;
+
+/// `CLJW_BACKEND=tree_walk|vm|wasmgc` (read once). An unknown value is ignored
+/// with a one-time warning on stderr, so a typo is visible.
+fn envBackend() ?[]const u8 {
+    if (env_backend_read) return env_backend_value;
+    if (std.c.getenv("CLJW_BACKEND")) |z| {
+        const v: []const u8 = std.mem.span(z);
+        inline for (.{ "tree_walk", "vm", "wasmgc" }) |name| {
+            if (std.mem.eql(u8, v, name)) env_backend_value = name;
+        }
+        if (env_backend_value == null and v.len != 0)
+            std.debug.print("warning: ignoring CLJW_BACKEND='{s}' (expected tree_walk, vm, or wasmgc)\n", .{v});
+    }
+    env_backend_read = true;
+    return env_backend_value;
+}
+
 /// Evaluate one top-level form. Callers own `locals` (typically a
 /// fixed `[MAX_LOCALS]Value`); `arena` is consulted only by the VM
 /// backend to hold the per-form `BytecodeChunk` slices.
@@ -92,8 +111,10 @@ pub fn evalForm(
     dispatch.current_env = env;
     defer dispatch.current_env = saved_consult_env;
 
-    // Runtime backend selection: check rt.backend_override first, then fall back to compile-time default
-    const backend_name = rt.backend_override orelse @tagName(build_options.backend);
+    // Runtime backend selection: `--backend=` flag, then the CLJW_BACKEND
+    // environment variable, then the build-time default. All three backends
+    // live in the same binary.
+    const backend_name = rt.backend_override orelse envBackend() orelse @tagName(build_options.backend);
 
     if (std.mem.eql(u8, backend_name, "wasmgc")) {
         // WasmGC backend: compile the Node to WAT and execute via zwasm
@@ -232,7 +253,11 @@ pub fn installVTable(rt: *Runtime) void {
     // bytecode constants). Lives here, not runtime.zig's Layer-0 registerGcHooks
     // aggregator, because `Function` is a Layer-1 type Layer 0 must not import.
     tree_walk.registerGcHooks();
-    if (comptime build_options.backend == .vm) {
+    // The vtable follows the runtime-selected backend (flag > CLJW_BACKEND >
+    // build default). wasmgc uses the tree_walk dispatch table: its compiled
+    // fn bodies hang off `FunctionMethod.native`, which `callMethodImpl` runs.
+    const selected = rt.backend_override orelse envBackend() orelse @tagName(build_options.backend);
+    if (std.mem.eql(u8, selected, "vm")) {
         vm.installVTable(rt);
     } else {
         tree_walk.installVTable(rt);

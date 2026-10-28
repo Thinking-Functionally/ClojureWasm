@@ -346,7 +346,9 @@ fn dispatchArgsRest(
                 \\                     print OK + value on agreement, MISMATCH + both
                 \\                     values (exit 1) on divergence.
                 \\  --backend=<name>   Select evaluation backend: tree_walk, vm, or wasmgc
-                \\                     (overrides compile-time default).
+                \\  --backend <name>   (all three live in this one binary; no rebuild needed).
+                \\                     Precedence: this flag, then the CLJW_BACKEND environment
+                \\                     variable (same values; for harnesses/CI), then the build default.
                 \\  --version          Print the version (ClojureWasm v<version> (<build-mode>[, wasm])) and exit.
                 \\  -h, --help         Show this help.
                 \\
@@ -368,12 +370,20 @@ fn dispatchArgsRest(
             return;
         } else if (std.mem.eql(u8, arg, "--compare")) {
             compare_mode = true;
-        } else if (std.mem.startsWith(u8, arg, "--backend=")) {
-            backend_override = arg["--backend=".len..];
+        } else if (std.mem.startsWith(u8, arg, "--backend=") or std.mem.eql(u8, arg, "--backend")) {
+            // Both `--backend=wasmgc` and `--backend wasmgc` are accepted.
+            backend_override = if (std.mem.eql(u8, arg, "--backend"))
+                (args.next() orelse {
+                    try stderr.print("Error: --backend requires an argument (tree_walk, vm, or wasmgc)\n", .{});
+                    try stderr.flush();
+                    std.process.exit(1);
+                })
+            else
+                arg["--backend=".len..];
             if (!std.mem.eql(u8, backend_override.?, "tree_walk") and
                 !std.mem.eql(u8, backend_override.?, "vm") and
                 !std.mem.eql(u8, backend_override.?, "wasmgc")) {
-                try stderr.print("Error: --backend must be tree_walk, vm, or wasmgc\n", .{});
+                try stderr.print("Error: --backend must be tree_walk, vm, or wasmgc, got '{s}'\n", .{backend_override.?});
                 try stderr.flush();
                 std.process.exit(1);
             }
