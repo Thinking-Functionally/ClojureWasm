@@ -595,7 +595,9 @@ pub fn emptyFn(rt: *Runtime, env: *Env, args: []const Value, loc: SourceLocation
         .sorted_map => try sorted.emptyMapBy(rt, coll.decodePtr(*const sorted.SortedMap).comparator), // repr-decode-ok: comparator field read; sorted_map has a single backing
         .sorted_set => try sorted.emptySetBy(rt, coll.decodePtr(*const sorted.SortedSet).map.decodePtr(*const sorted.SortedMap).comparator), // repr-decode-ok: comparator field read; sorted_set has a single backing
         .persistent_queue => try persistent_queue.emptyQueue(rt), // (empty q) → EMPTY
-        .list, .cons => try list.emptyList(rt), // (empty '(1 2)) → () (D-164)
+        // Every seq flavour (lazy seqs, ranges, chunked/string/array seqs)
+        // empties to () like JVM's PersistentList.EMPTY (D-164).
+        .list, .cons, .lazy_seq, .range, .chunked_cons, .string_seq, .array_seq => try list.emptyList(rt),
         // JVM Clojure: (empty "hi") → nil (String is not a Clojure
         // collection per IPersistentCollection contract). cw v1
         // follows the same semantic; a 0-length string is not what

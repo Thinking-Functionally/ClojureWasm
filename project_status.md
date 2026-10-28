@@ -87,10 +87,14 @@ Reproduce: `BACKEND=wasmgc bash test/wasmgc_baseline.sh` (also `vm`,
 three backends by `test/clj/run.sh`, which requires byte-identical results; with
 `--jvm` the same source also runs on JVM Clojure as the oracle. Current suites
 (assertions): tier_a 13, features 18 (needs `eval`), regression 10, p99_lists 102
-(L-99 P01-P28), p99_arithmetic 44 (P31-P41), fourclojure 112 (problems 1-41);
-all agree on tree_walk, vm, wasmgc and JVM Clojure. Remaining to build: L-99
-P46-P99 (logic, trees, graphs, puzzles; heavy ones tagged slow) and 4clojure
-42-98. Gate steps: `test_clj_tier_a`, `test_clj_suites`.
+(L-99 P01-P28), p99_arithmetic 44 (P31-P41), p99_logic 65 (P46-P50), p99_trees 154
+(P54-P69), p99_multitrees 32 (P70-P73), p99_graphs 66 (P80-P89), p99_puzzles 70
+(P90-P99), fourclojure 302 (problems 1-98 except 72 and 87, which the skeleton omits);
+all 11 suites agree on tree_walk, vm, wasmgc and JVM Clojure (31 s for all four).
+The suite found two real bugs: `empty` raised on ranges and every lazy seq (now `()`
+like JVM, with a differential case), and wasmgc died with `OutOfFuel` after zwasm's
+default 1e9 instructions (now unmetered; the Clojure eval budget still bounds runaway
+code). Gate steps: `test_clj_tier_a`, `test_clj_suites`.
 
 Full `test/run_all.sh` (this machine, 23 min): 436 passed, 4 failed. The four are
 the two `yq` steps, `e2e_phase14_eval` (above), and `e2e_reach`, which was an

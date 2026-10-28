@@ -455,7 +455,10 @@ const State = struct {
         linker.* = zwasm.Linker.init(eng);
         try defineImports(linker, self);
         const inst = try gpa.create(zwasm.Instance);
-        inst.* = try linker.instantiate(mod, .{});
+        // zwasm's default 1e9-instruction fuel would kill any long-running (but
+        // legitimate) program; TreeWalk/VM have no such cap. The Clojure-level
+        // eval budget (ticked on loop back-edges) still bounds runaway code.
+        inst.* = try linker.instantiate(mod, .{ .fuel = .unmetered });
         self.eng = eng;
         self.mod = mod;
         self.linker = linker;

@@ -19,4 +19,10 @@ features|files|-|features/eval_test.clj|18|eval|no
 regression|files|-|regression/min_max_key_test.clj|10|-|no
 p99_lists|ns|p99/src,p99/test|p99.lists-test|102|-|no
 p99_arithmetic|ns|p99/src,p99/test|p99.arithmetic-test|44|-|no
-fourclojure|ns|fourclojure/src,fourclojure/test|fourclojure.core-test|112|-|no
+fourclojure|ns|fourclojure/src,fourclojure/test|fourclojure.core-test|302|-|no
+p99_logic|ns|p99/src,p99/test|p99.logic-test|65|-|no
+p99_trees|ns|p99/src,p99/test|p99.trees-test|154|-|no
+p99_multitrees|ns|p99/src,p99/test|p99.multitrees-test|32|-|no
+p99_graphs|ns|p99/src,p99/test|p99.graphs-test|66|-|no
+p99_puzzles|ns|p99/src,p99/test|p99.puzzles-test|70|-|no
+p99_puzzles_slow|ns|p99/src,p99/test|p99.puzzles-slow-test|17|-|yes
