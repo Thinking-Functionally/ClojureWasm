@@ -445,6 +445,7 @@ run_step "backend_diff_three_way"      "bash scripts/check_backend_diff.sh"
 run_step "compat_members" "bash scripts/check_compat_members.sh"
 
 run_step "e2e_phase2_exit"     "bash test/e2e/phase2_exit.sh"
+run_step "e2e_wasmgc_backend_smoke" "bash test/e2e/wasmgc_backend_smoke.sh"
 run_step "e2e_phase3_cli"      "bash test/e2e/phase3_cli.sh"
 run_step "e2e_phase3_exit"     "bash test/e2e/phase3_exit.sh"
 run_step "e2e_phase4_cli"        "bash test/e2e/phase4_cli.sh"
