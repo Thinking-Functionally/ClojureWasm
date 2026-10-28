@@ -1,0 +1,19 @@
+# test/clj suite manifest — one suite per line, `|`-separated; `#` starts a comment.
+#
+# name | kind | classpath | spec | min_assertions | requires | slow
+#
+#   kind      files = evaluate the listed files (no ns form) then run-tests
+#             ns    = require the listed namespaces (comma-separated) then run-tests
+#   classpath comma-separated dirs relative to test/clj, `-` for none
+#   spec      files: comma-separated paths relative to test/clj
+#             ns:    comma-separated namespace names
+#   min_assertions  pass+fail+error must be >= this (a suite must not shrink silently)
+#   requires  comma-separated capabilities the suite needs, `-` for none. The runner
+#             skips (and reports) a suite whose capability is not in $CLJ_TEST_CAPS
+#             (default: "eval threads fs net java"). Standalone/AOT platforms with no
+#             runtime compiler would omit `eval`.
+#   slow      yes = only with --include-slow
+#
+tier_a|files|-|tier_a/cw_ported.clj|13|-|no
+features|files|-|features/eval_test.clj|18|eval|no
+regression|files|-|regression/min_max_key_test.clj|10|-|no

@@ -523,6 +523,9 @@ run_step "e2e_phase10_exit_smoke"            "bash test/e2e/phase10_exit_smoke.s
 # phase11_clojure_test retired: the D-099-era minimal `is`/`run-tests` surface it
 # tested was replaced by the real clojure.test (D-227) — see e2e_phase15_clojure_test.
 run_step "test_clj_tier_a"                   "bash test/clj/run_tier_a.sh"
+# Every test/clj suite on all three backends (one binary, runtime backend choice);
+# they must agree byte-for-byte. See test/clj/README.md.
+run_step "test_clj_suites"                   "bash test/clj/run.sh --all-backends"
 run_step "e2e_phase11_exit_smoke"            "bash test/e2e/phase11_exit_smoke.sh"
 run_step "e2e_phase13_exit_smoke"            "bash test/e2e/phase13_exit_smoke.sh"
 run_step "e2e_phase14_catch_keyword"         "bash test/e2e/phase14_catch_keyword.sh"

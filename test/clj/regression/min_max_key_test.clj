@@ -60,8 +60,5 @@
   (let [cum (vec (reductions + (map - [1 3 2 4] [3 2 3 2])))]
     (clojure.test/is (= 3 (mod (inc (apply min-key cum (range (count cum)))) (count cum))))))
 
-;; Run all tests and print summary
-(let [summary (clojure.test/run-tests)]
-  (println)
-  (println "Summary:" (:pass summary) "passed," (:fail summary) "failed," (:error summary) "errors")
-  [(:pass summary) (:fail summary)])
+;; Run via `bash test/clj/run.sh --suite regression`. Add one file per fixed bug
+;; and list it in test/clj/support/suites.txt.

@@ -94,8 +94,5 @@
   (eval (quote (defn add-twenty-test [x] (+ x 20))))
   (clojure.test/is (= 25 ((resolve (symbol "add-twenty-test")) 5))))
 
-;; Run all tests and print summary
-(let [summary (clojure.test/run-tests)]
-  (println)
-  (println "Summary:" (:pass summary) "passed," (:fail summary) "failed," (:error summary) "errors")
-  [(:pass summary) (:fail summary)])
+;; Run via `bash test/clj/run.sh --suite features` (requires the `eval`
+;; capability; see test/clj/support/suites.txt).

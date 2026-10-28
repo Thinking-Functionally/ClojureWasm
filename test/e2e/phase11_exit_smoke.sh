@@ -4,7 +4,7 @@
 # §9.13 row 11.5 — Phase 11 exit smoke + final activation verify.
 # Asserts:
 #   - clojure.test/is + run-tests compose end-to-end
-#   - The 13 ported tests in test/clj/cw_ported.clj all pass
+#   - The 13 ported tests in test/clj/tier_a/cw_ported.clj all pass
 #   - build_options.phase_at_least_11 flag is true post-flip
 #   - Self-host viability still holds (cross-ns expression touches
 #     clojure.test + clojure.set + clojure.edn)
