@@ -38,3 +38,20 @@ boundary specifically.
 When JIT lands (Phase 17), `runner.zig` switches to
 `Evaluator.compareThree(...)` and asserts TreeWalk == VM == JIT.
 `cases.yaml` is unchanged.
+
+## Three-way backend differential (`backends/`)
+
+`scripts/check_backend_diff.sh` runs every case in `test/diff/backends/*.txt`
+(cases separated by `;;---`) as `(do <case>)` in a separate `cljw` process per
+backend (`--backend=tree_walk|vm|wasmgc`) and requires identical stdout, exit
+code and error header (first two stderr lines; traces differ per backend).
+Separate processes avoid the in-process `--compare` limits (shared `Env`, heap
+values compared by address). Accepted divergences go in
+`backends/known_divergences.txt` as `file:case-number`.
+
+`cljw --compare -e '<expr>'` is the in-process oracle; it now runs all three
+backends and prints one line per backend on `MISMATCH`.
+
+Gate steps (`test/run_all.sh`): `zig_build_test_wasmgc`,
+`corpus_regression_tree_walk`, `corpus_regression_wasmgc`,
+`backend_diff_three_way`, `e2e_wasmgc`.

@@ -73,6 +73,15 @@ Reproduce: `BACKEND=wasmgc bash test/wasmgc_baseline.sh` (also `vm`,
 - `clojure.core` is not natively WasmGC for user programs (host imports);
   the backend is not standalone.
 - Slower and larger than the VM (see unit-suite figures above).
-- Not done: three-way differential cases in `test/diff`, a CI gate in
-  `test/run_all.sh`, per-form `wasm-tools` subprocess replaced by direct binary
-  emission.
+- Not done: a CI gate run on a clean checkout of the full `test/run_all.sh`
+  (the new steps were each run individually), and replacing the per-form
+  `wasm-tools` subprocess with direct binary emission.
+
+## Gate and differential coverage
+
+`test/run_all.sh` now also runs: `zig_build_test_wasmgc` (same test binary,
+`CLJW_BACKEND=wasmgc`), `corpus_regression_tree_walk`, `corpus_regression_wasmgc`,
+`backend_diff_three_way` (73 cases in `test/diff/backends/`, one process per
+backend; see `test/diff/README.md`) and `e2e_wasmgc` (sandboxed harness with the
+allow-list `test/wasmgc_known_failures.txt`). `cljw --compare` runs all three
+backends in-process.

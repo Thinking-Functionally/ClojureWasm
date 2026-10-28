@@ -1,0 +1,170 @@
+;; Three-way differential cases (tree_walk / vm / wasmgc).
+;; Cases are separated by a line containing exactly `;;---`. Each case is run as
+;; `(do <case>)` in a separate cljw process per backend; scripts/check_backend_diff.sh
+;; requires identical stdout, exit code and error header across all three.
+;; Keep cases deterministic (no clock/random/unordered output).
+
+;; ---- closures and captures
+(let [x 10] ((fn [y] (+ x y)) 5))
+;;---
+(vec (map (fn [n] ((fn [x] (+ x n)) 10)) [1 2 3]))
+;;---
+(let [c (atom 0) f (fn [] (swap! c inc))] (f) (f) (f))
+;;---
+(letfn [(ev? [n] (if (zero? n) true (od? (dec n)))) (od? [n] (if (zero? n) false (ev? (dec n))))] [(ev? 10) (od? 7) (ev? 7)])
+;;---
+((fn fact [n] (if (< n 2) 1 (* n (fact (dec n))))) 12)
+;;---
+((((fn [a] (fn [b] (fn [c] (+ a b c)))) 1) 2) 3)
+;;---
+(let [fs (map (fn [i] (fn [] i)) (range 4))] (mapv (fn [f] (f)) fs))
+;;---
+(let [compose (fn [f g] (fn [x] (f (g x))))] ((compose inc (fn [x] (* x 2))) 5))
+
+;; ---- arities and varargs
+;;---
+(let [f (fn ([] :zero) ([a] :one) ([a b] :two) ([a b & r] [:many r]))] [(f) (f 1) (f 1 2) (f 1 2 3 4)])
+;;---
+(apply (fn [a & r] [a r]) 1 2 [3 4])
+;;---
+((fn [& xs] (count xs)))
+;;---
+((fn [a b] a) 1)
+
+;; ---- loop / recur
+;;---
+(loop [i 0 acc []] (if (< i 5) (recur (inc i) (conj acc (* i i))) acc))
+;;---
+((fn [n acc] (if (zero? n) acc (recur (dec n) (+ acc n)))) 1000 0)
+;;---
+(loop [i 0] (if (< i 100000) (recur (inc i)) i))
+;;---
+(loop [a 1 b 2] (if (> a 50) [a b] (recur (+ a b) a)))
+;;---
+(loop [xs (range 5) out []] (if (seq xs) (recur (rest xs) (conj out (first xs))) out))
+
+;; ---- exceptions
+;;---
+(try (throw (ex-info "x" {:a 1})) (catch Exception e [(ex-message e) (ex-data e)]))
+;;---
+(try (/ 1 0) (catch ArithmeticException e :div))
+;;---
+(try (inc nil) (catch Exception e :npe))
+;;---
+(let [log (atom [])] (try (try (throw (Exception. "in")) (finally (swap! log conj :f1))) (catch Exception e (swap! log conj :c))) @log)
+;;---
+(try (try (throw (ex-info "a" {})) (catch Exception e (throw (ex-info "b" {:cause (ex-message e)})))) (catch Exception e [(ex-message e) (ex-data e)]))
+;;---
+(try 1 (finally 2))
+;;---
+(try (throw (ex-info "t" {:type :boom})) (catch :boom e :kw))
+;;---
+(throw (ex-info "boom" {:k 1}))
+;;---
+(nth [1 2 3] 10)
+;;---
+(first 5)
+;;---
+(undefined-fn-xyz 1)
+;;---
+(let [f (fn [x] (throw (ex-info "deep" {:x x})))] (try (f 1) (catch Exception e (ex-data e))))
+
+;; ---- dynamic vars and binding
+;;---
+(do (def ^:dynamic *v* 1) [*v* (binding [*v* 2] *v*) *v*])
+;;---
+(do (def ^:dynamic *w* 1) (binding [*w* 5] (set! *w* 9) *w*))
+;;---
+(do (def ^:dynamic *z* 1) (binding [*z* 2] (binding [*z* 3] *z*)))
+;;---
+(do (def ^:dynamic *q* 1) (binding [*q* 2] (try (throw (ex-info "e" {})) (catch Exception e *q*))))
+
+;; ---- literals, collections, seqs
+;;---
+[1 2 {:a 1 :b [3 4]} #{5}]
+;;---
+(into {} (map (fn [x] [x (* x x)]) (range 5)))
+;;---
+(-> {:a 1} (assoc :b 2) (update :a inc) (dissoc :b))
+;;---
+(reduce + (map inc (filter even? (range 20))))
+;;---
+(sort-by - [3 1 2])
+;;---
+(group-by odd? (range 6))
+;;---
+(frequencies "hello")
+;;---
+(take 5 (iterate (fn [x] (* 2 x)) 1))
+;;---
+(doall (map (fn [x] (* x x)) (range 10)))
+;;---
+(for [x (range 3) y (range 2) :when (not= x y)] [x y])
+;;---
+(let [{:keys [a b] :or {b 9}} {:a 1} [x & ys] [1 2 3]] [a b x ys])
+;;---
+(mapv (fn [[k v]] [k (inc v)]) {:a 1 :b 2})
+;;---
+(transduce (map inc) + 0 (range 10))
+;;---
+(update-in {:a {:b 1}} [:a :b] inc)
+;;---
+(partition 2 (range 7))
+;;---
+(let [s (map (fn [x] (println "realize" x) x) [1 2])] (count s))
+;;---
+(doseq [x [1 2]] (println x))
+
+;; ---- strings and numbers
+;;---
+(str "a" 1 :k nil)
+;;---
+(format "%05.2f %s" 3.14159 "x")
+;;---
+[(+ 1/2 1/3) (* 1.5 2) (quot 7 2) (mod -7 3) (rem -7 3)]
+;;---
+(bigint 12345678901234567890)
+;;---
+(+ 9223372036854775807 1)
+;;---
+(case 3 1 :a 3 :c :d)
+;;---
+(cond-> 1 true inc false (* 2))
+
+;; ---- protocols, multimethods, records
+;;---
+(do (defprotocol P (m [x])) (extend-type Long P (m [x] (* 2 x))) (m 21))
+;;---
+(do (defrecord R [a b]) (let [r (->R 1 2)] [(:a r) (assoc r :b 3)]))
+;;---
+(do (defmulti area :shape) (defmethod area :sq [x] (* (:s x) (:s x))) (area {:shape :sq :s 4}))
+
+;; ---- interop
+;;---
+(.toUpperCase "abc")
+;;---
+(Math/abs -5)
+;;---
+(String/valueOf 42)
+;;---
+(let [a (java.util.ArrayList.)] (.add a 1) (.add a 2) (.size a))
+
+;; ---- concurrency and misc
+;;---
+(deref (future (+ 1 2)))
+;;---
+(let [p (promise)] (deliver p 5) @p)
+;;---
+(let [a (atom 0) ts (doall (for [_ (range 4)] (future (dotimes [_ 50] (swap! a inc)))))] (run! deref ts) @a)
+;;---
+(meta (with-meta [1] {:a 1}))
+;;---
+(with-out-str (print "hi"))
+;;---
+(macroexpand '(when true 1))
+;;---
+(eval '(+ 1 2))
+;;---
+(read-string "(1 2 #{3})")
+;;---
+(do (require '[clojure.string :as s]) (s/upper-case "x"))

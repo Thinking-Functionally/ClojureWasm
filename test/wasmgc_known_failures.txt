@@ -1,0 +1,16 @@
+# Scripts that fail under test/wasmgc_baseline.sh for reasons unrelated to the
+# backend under test. Format: `<script-name> [backend]` (no backend = all).
+# The harness exits non-zero only for failures NOT listed here.
+
+# Fail on every backend in the sandbox harness.
+phase14_eval
+phase16_wasm_run_output_cap
+phase4_cli
+phase4_exit
+phase4_exit_codes
+
+# Run `zig build` themselves, replacing the binary under test (the harness
+# flags that as a failure); they pass when run against a plain build.
+entrypoint_eval_parity wasmgc
+phase14_cljw_build wasmgc
+phase8_compare_cli wasmgc

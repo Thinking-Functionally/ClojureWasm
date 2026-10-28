@@ -267,6 +267,12 @@ pub fn runSourceCompare(
     } else |err| {
         try stdout.print("ERROR {s}", .{@errorName(err)});
     }
+    try stdout.writeAll("\n  wasmgc:    ");
+    if (result.wasmgc) |v| {
+        try print.printValue(stdout, v);
+    } else |err| {
+        try stdout.print("ERROR {s}", .{@errorName(err)});
+    }
     try stdout.writeByte('\n');
     try stdout.flush();
     std.process.exit(1);

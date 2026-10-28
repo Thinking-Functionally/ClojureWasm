@@ -32,11 +32,13 @@ const tree_walk = @import("backend/tree_walk.zig");
 const vm = @import("backend/vm.zig");
 const vm_compiler = @import("backend/vm/compiler.zig");
 const driver = @import("driver.zig");
+const wasmgc = @import("backend/wasmgc.zig");
 
 pub const CompareResult = struct {
     tree_walk: anyerror!Value,
     vm: anyerror!Value,
-    /// `true` when both backends succeeded AND produced the same
+    wasmgc: anyerror!Value,
+    /// `true` when all three backends succeeded AND produced the same
     /// NaN-boxed bit pattern. See module docstring for the
     /// immediate-Value caveat.
     equal: bool,
@@ -55,15 +57,22 @@ pub fn compare(
     vm.installVTable(rt);
     const vm_value = runOnce(rt, env, table, arena, source, .vm);
 
+    // wasmgc dispatches through the tree_walk table (its compiled fn bodies hang
+    // off `FunctionMethod.native`); evalChunk stays wired for bytecode-backed fns.
+    tree_walk.installVTable(rt);
+    rt.vtable.?.evalChunk = &vm.evalChunkErased;
+    const wg_value = runOnce(rt, env, table, arena, source, .wasmgc);
+
     const equal = blk: {
         const tw = tw_value catch break :blk false;
         const vm_v = vm_value catch break :blk false;
-        break :blk @intFromEnum(tw) == @intFromEnum(vm_v);
+        const wg = wg_value catch break :blk false;
+        break :blk @intFromEnum(tw) == @intFromEnum(vm_v) and @intFromEnum(tw) == @intFromEnum(wg);
     };
-    return .{ .tree_walk = tw_value, .vm = vm_value, .equal = equal };
+    return .{ .tree_walk = tw_value, .vm = vm_value, .wasmgc = wg_value, .equal = equal };
 }
 
-const BackendChoice = enum { tree_walk, vm };
+const BackendChoice = enum { tree_walk, vm, wasmgc };
 
 fn runOnce(
     rt: *Runtime,
@@ -108,7 +117,7 @@ fn evalTopLevelInBackend(
     const node = try analyzer.analyze(arena, rt, env, null, form, table);
     var locals: [256]Value = [_]Value{.nil_val} ** 256;
     return switch (backend) {
-        .tree_walk => blk: {
+        .tree_walk, .wasmgc => blk: {
             // GC-ROOT: A6 — top-level locals window (the driver.evalForm twin).
             var gc_stack: [1]Value = .{.nil_val};
             var gc_sp: u16 = 0;
@@ -120,6 +129,7 @@ fn evalTopLevelInBackend(
             };
             root_set.eval_frame_head = &gc_frame;
             defer root_set.eval_frame_head = gc_frame.parent;
+            if (backend == .wasmgc) break :blk wasmgc.evalNode(rt, env, &locals, arena, node);
             break :blk tree_walk.eval(rt, env, &locals, node);
         },
         .vm => blk: {
@@ -198,6 +208,27 @@ test "compare: boolean and nil immediate Values" {
     defer f3.deinit();
     const r_false = compare(&f3.rt, &f3.env, &f3.table, f3.arena.allocator(), "false");
     try testing.expect(r_false.equal);
+}
+
+test "compare: closures, let and loop agree across all three backends" {
+    const cases = [_][]const u8{
+        "((fn* [x] x) 7)",
+        "(let* [a 5 b 6] ((fn* [y] y) b))",
+        "(let* [k 10] ((fn* [x] k) 1))",
+        "(loop* [x true] (if x (recur false) 3))",
+        "((fn* ([a] 1) ([a b] 2)) 1 2)",
+        "(let* [f (fn* [n] (if n 1 2))] (f nil))",
+    };
+    inline for (cases) |src| {
+        var f: Fixture = undefined;
+        try Fixture.init(&f, testing.allocator);
+        defer f.deinit();
+        const r = compare(&f.rt, &f.env, &f.table, f.arena.allocator(), src);
+        if (!r.equal) {
+            std.debug.print("three-way mismatch for {s}\n", .{src});
+            return error.TestUnexpectedResult;
+        }
+    }
 }
 
 test "ADR-0125: a step budget kills an infinite loop under BOTH backends" {

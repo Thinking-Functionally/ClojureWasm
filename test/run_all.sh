@@ -328,6 +328,9 @@ resume_done() { (( RESUME )) && grep -qxF "$GATE_FP $1" "$GATE_LEDGER" 2>/dev/nu
 # build-mode policy: .claude/rules/perf_measure_release.md (amended).
 run_step "zig_build_test_vm"        "zig build test -Dwasm -Doptimize=ReleaseSafe"
 run_step "zig_build_test_tree_walk" "zig build test -Dwasm -Dbackend=tree_walk -Doptimize=ReleaseSafe"
+# WasmGC backend: the SAME test binary as the vm step, run on the wasmgc backend
+# (backend is a runtime choice — CLJW_BACKEND — not a rebuild).
+run_step "zig_build_test_wasmgc"    "CLJW_BACKEND=wasmgc zig build test -Dwasm -Doptimize=ReleaseSafe"
 run_step "zone_check"           "bash scripts/zone_check.sh --gate"
 run_step "entrypoint_surface"   "bash scripts/check_entrypoint_surface.sh"
 run_step "repr_decode"          "bash scripts/check_repr_decode.sh --gate"
@@ -428,6 +431,12 @@ run_step "gate_parity"          "bash scripts/check_gate_parity.sh"
 # drift. See .claude/rules/clj_diff_sweep.md.
 run_step "lazy_ns_replay"      "bash scripts/check_lazy_ns_replay.sh"
 run_step "corpus_regression"   "bash scripts/check_corpus_regression.sh"
+# The same golden corpus on the other two backends (runtime choice, one binary).
+run_step "corpus_regression_tree_walk" "CLJW_BACKEND=tree_walk bash scripts/check_corpus_regression.sh"
+run_step "corpus_regression_wasmgc"    "CLJW_BACKEND=wasmgc bash scripts/check_corpus_regression.sh"
+# Three-way differential: every case in test/diff/backends must agree across
+# tree_walk / vm / wasmgc (stdout, exit code, error header), one process each.
+run_step "backend_diff_three_way"      "bash scripts/check_backend_diff.sh"
 
 # Host-class member truth (ADR-0174 D9): compat_tiers.yaml per-class member
 # lists must match the registered descriptors (both directions). Runs AFTER
@@ -859,6 +868,11 @@ run_step "scan_panic_audit"    "bash scripts/scan_panic_audit.sh"  optional
 # served its role and is retired. Perf is now measured on demand via
 # `bench/compare_langs.sh` (cross-language) + `bench/run_bench.sh` (cljw-only),
 # never inside the gate. (Retired: bench_quick, bench_regression.)
+
+# Every e2e script on the wasmgc backend (sandboxed harness; one binary, runtime
+# backend choice). Exits non-zero only for failures outside the allow-list
+# test/wasmgc_known_failures.txt. Slow (~25 min), so not in the smoke set.
+run_step "e2e_wasmgc" "BACKEND=wasmgc bash test/wasmgc_baseline.sh"
 
 # --- Summary ---
 

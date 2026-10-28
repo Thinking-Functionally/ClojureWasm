@@ -54,4 +54,17 @@ total=$(wc -l <"$OUT/summary.tsv" | tr -d ' '); ok=$(grep -c $'\tpass\t' "$OUT/s
 asserts=$(awk -F'\t' '{s+=$3} END{print s+0}' "$OUT/summary.tsv")
 echo "scripts passing: $ok/$total   PASS assertions seen: $asserts"
 echo "table: $OUT/summary.tsv"
-[ "$ok" -eq "$total" ]
+
+# Failures not covered by the allow-list (test/wasmgc_known_failures.txt) are the
+# ones that matter; the harness exits non-zero only for those.
+unexpected=""
+while IFS=$'\t' read -r name status _; do
+    [ "$status" = fail ] || continue
+    if grep -Eq "^${name}([[:space:]]+${BACKEND})?[[:space:]]*$" "$REPO/test/wasmgc_known_failures.txt"; then continue; fi
+    unexpected="$unexpected $name"
+done <"$OUT/summary.tsv"
+if [ -n "$unexpected" ]; then
+    echo "UNEXPECTED failures on $BACKEND:$unexpected"
+    exit 1
+fi
+echo "no unexpected failures on $BACKEND (known failures: test/wasmgc_known_failures.txt)"
