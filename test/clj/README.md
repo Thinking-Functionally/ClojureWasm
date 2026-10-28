@@ -30,8 +30,14 @@ bash test/clj/run.sh                    # all suites, binary's default backend
 bash test/clj/run.sh --all-backends     # tree_walk, vm, wasmgc: must agree
 bash test/clj/run.sh --suite tier_a --backend wasmgc
 bash test/clj/run.sh --include-slow     # also suites marked slow
+bash test/clj/run.sh --all-backends --jvm   # also run each suite on JVM Clojure (`clj`)
 CLJ_TEST_CAPS="threads fs" bash test/clj/run.sh   # no `eval`: features is SKIPped
 ```
+
+`--jvm` is the oracle: the p99 and fourclojure suites are plain portable Clojure,
+so the very same source and tests run on JVM Clojure and the assertion counts
+must match. A test's expected value counts as validated only once JVM Clojure
+agrees. (Requires `clj`; not part of the gate.)
 
 ## Contract (what makes a suite portable to other platforms)
 

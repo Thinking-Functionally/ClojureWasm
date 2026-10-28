@@ -6,6 +6,7 @@
 #   bash test/clj/run.sh --backend wasmgc      # one backend
 #   bash test/clj/run.sh --suite tier_a        # one suite (names: test/clj/support/suites.txt)
 #   bash test/clj/run.sh --include-slow        # also the suites marked slow
+#   bash test/clj/run.sh --jvm                 # also run each suite on JVM Clojure (`clj`) as the oracle
 #   CLJW_BIN=/path/to/cljw  CLJ_TEST_CAPS="threads fs"  bash test/clj/run.sh
 #
 # Each suite is run as ONE cljw process per backend whose only form calls
@@ -28,6 +29,7 @@ CAPS=" ${CLJ_TEST_CAPS:-eval threads fs net java} "
 SUITE="all"
 BACKENDS="default"
 SLOW=0
+JVM=0
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -35,6 +37,7 @@ while [ $# -gt 0 ]; do
         --backend) BACKENDS="${2:?--backend needs a name}"; shift 2 ;;
         --all-backends) BACKENDS="tree_walk vm wasmgc"; shift ;;
         --include-slow) SLOW=1; shift ;;
+        --jvm) JVM=1; shift ;;
         --bin) BIN="${2:?--bin needs a path}"; shift 2 ;;
         -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
         *) echo "unknown argument: $1 (see --help)" >&2; exit 2 ;;
@@ -118,12 +121,35 @@ while IFS='|' read -r name kind cp spec min req slow; do
         fi
     done
 
+    if [ "$JVM" -eq 1 ]; then
+        # Oracle: the SAME suite on JVM Clojure (`clj`). Only the assertion counts
+        # are compared (clojure.test's text differs slightly between hosts).
+        if command -v clj >/dev/null 2>&1 && [ -n "$firstsum" ]; then
+            jcp="$CP"
+            run_bounded clj -Sdeps "{:paths [\"$(echo "$jcp" | sed 's/:/" "/g')\"]}" -M \
+                -e "(do (require 'cljtest.runner) $FORM)" \
+                >"$TMP/$name.jvm.out" 2>"$TMP/$name.jvm.err" </dev/null
+            jrc=$?
+            jsum="$(grep '^CLJTEST-SUMMARY' "$TMP/$name.jvm.out" | tail -1)"
+            if [ -z "$jsum" ]; then
+                problems="$problems [jvm: no CLJTEST-SUMMARY, exit $jrc]"
+            else
+                for k in test pass fail error; do
+                    [ "$(field "$jsum" $k)" = "$(field "$firstsum" $k)" ] || problems="$problems [jvm vs $first: $k $(field "$jsum" $k) != $(field "$firstsum" $k)]"
+                done
+            fi
+        else
+            problems="$problems [--jvm requested but \`clj\` not found]"
+        fi
+    fi
+
     if [ -z "$problems" ]; then
-        echo "OK    $name: $(field "$firstsum" pass) assertions pass  [backends: ${BACKENDS}]"
+        echo "OK    $name: $(field "$firstsum" pass) assertions pass  [backends: ${BACKENDS}$([ "$JVM" -eq 1 ] && echo ' + jvm')]"
         passed=$((passed + 1))
     else
         echo "FAIL  $name:$problems"
-        for b in $BACKENDS; do
+        for b in $BACKENDS jvm; do
+            [ -f "$TMP/$name.$b.out" ] || continue
             echo "  --- $b (last 12 lines of stdout) ---"
             tail -12 "$TMP/$name.$b.out" | sed 's/^/  /'
             [ -s "$TMP/$name.$b.err" ] && { echo "  --- $b stderr ---"; head -8 "$TMP/$name.$b.err" | sed 's/^/  /'; }

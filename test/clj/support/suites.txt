@@ -17,3 +17,6 @@
 tier_a|files|-|tier_a/cw_ported.clj|13|-|no
 features|files|-|features/eval_test.clj|18|eval|no
 regression|files|-|regression/min_max_key_test.clj|10|-|no
+p99_lists|ns|p99/src,p99/test|p99.lists-test|102|-|no
+p99_arithmetic|ns|p99/src,p99/test|p99.arithmetic-test|44|-|no
+fourclojure|ns|fourclojure/src,fourclojure/test|fourclojure.core-test|112|-|no

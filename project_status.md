@@ -83,6 +83,15 @@ Reproduce: `BACKEND=wasmgc bash test/wasmgc_baseline.sh` (also `vm`,
 
 ## Gate and differential coverage
 
+`test/clj/` (see its README) is a self-contained `clojure.test` suite run on all
+three backends by `test/clj/run.sh`, which requires byte-identical results; with
+`--jvm` the same source also runs on JVM Clojure as the oracle. Current suites
+(assertions): tier_a 13, features 18 (needs `eval`), regression 10, p99_lists 102
+(L-99 P01-P28), p99_arithmetic 44 (P31-P41), fourclojure 112 (problems 1-41);
+all agree on tree_walk, vm, wasmgc and JVM Clojure. Remaining to build: L-99
+P46-P99 (logic, trees, graphs, puzzles; heavy ones tagged slow) and 4clojure
+42-98. Gate steps: `test_clj_tier_a`, `test_clj_suites`.
+
 Full `test/run_all.sh` (this machine, 23 min): 436 passed, 4 failed. The four are
 the two `yq` steps, `e2e_phase14_eval` (above), and `e2e_reach`, which was an
 orphaned vacuous script (`wasmgc_simple_arithmetic.sh`) that has since been
