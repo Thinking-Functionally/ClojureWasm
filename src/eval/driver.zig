@@ -79,6 +79,12 @@ var env_backend_value: ?[]const u8 = null;
 
 /// `CLJW_BACKEND=tree_walk|vm|wasmgc` (read once). An unknown value is ignored
 /// with a one-time warning on stderr, so a typo is visible.
+/// The backend a fresh process runs on: `CLJW_BACKEND`, else the build default.
+/// (The `--backend` flag is applied per run on top of this.) Used by `--version`.
+pub fn effectiveBackend() []const u8 {
+    return envBackend() orelse @tagName(build_options.backend);
+}
+
 fn envBackend() ?[]const u8 {
     if (env_backend_read) return env_backend_value;
     if (std.c.getenv("CLJW_BACKEND")) |z| {

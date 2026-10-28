@@ -29,6 +29,7 @@ const gc_torture = @import("../runtime/gc/gc_torture.zig");
 const eval_budget = @import("../runtime/concurrency/eval_budget.zig");
 const process_env = @import("../runtime/process_env.zig");
 const file_io = @import("../runtime/file_io.zig");
+const driver = @import("../eval/driver.zig");
 const deps_parse = @import("deps/parse.zig");
 const deps_resolve = @import("deps/resolve.zig");
 const deps_run_mode = @import("deps/run_mode.zig");
@@ -323,7 +324,7 @@ fn dispatchArgsRest(
             // The NON-default backend is named so scripts (check_vm_parity's
             // backend-aware e2e cases) can detect a tree_walk binary; the vm
             // default keeps the exact historical banner.
-            try stdout.print("ClojureWasm v{s} ({s}{s}{s})\n", .{ build_options.version, @tagName(@import("builtin").mode), if (build_options.wasm) ", wasm" else "", if (build_options.backend == .tree_walk) ", tree_walk" else if (build_options.backend == .wasmgc) ", wasmgc" else "" });
+            try stdout.print("ClojureWasm v{s} ({s}{s}{s})\n", .{ build_options.version, @tagName(@import("builtin").mode), if (build_options.wasm) ", wasm" else "", if (std.mem.eql(u8, driver.effectiveBackend(), "tree_walk")) ", tree_walk" else if (std.mem.eql(u8, driver.effectiveBackend(), "wasmgc")) ", wasmgc" else "" });
             try stdout.flush();
             return;
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
