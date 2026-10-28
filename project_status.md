@@ -73,15 +73,94 @@ Reproduce: `BACKEND=wasmgc bash test/wasmgc_baseline.sh` (also `vm`,
 - `clojure.core` is not natively WasmGC for user programs (host imports);
   the backend is not standalone.
 - Slower and larger than the VM (see unit-suite figures above).
-- Not done: a CI gate run on a clean checkout of the full `test/run_all.sh`
-  (the new steps were each run individually), and replacing the per-form
-  `wasm-tools` subprocess with direct binary emission.
+- Per-form `wasm-tools` subprocess (needs `wasm-tools` on `PATH`).
+- `e2e_phase14_eval` fails in the full gate on the VM as well as the other
+  backends. Not verified against a clean `main` (building `main` in `/tmp` was
+  denied); believed pre-existing since the branch does not touch stdin echo.
+  To check: on a `main` checkout run `zig build -Dwasm && bash test/e2e/phase14_eval.sh`.
+- `accepted_divergences` and `compat_members` gate steps fail on this machine
+  only because `yq` is not installed.
 
 ## Gate and differential coverage
 
-`test/run_all.sh` now also runs: `zig_build_test_wasmgc` (same test binary,
+Full `test/run_all.sh` (this machine, 23 min): 436 passed, 4 failed. The four are
+the two `yq` steps, `e2e_phase14_eval` (above), and `e2e_reach`, which was an
+orphaned vacuous script (`wasmgc_simple_arithmetic.sh`) that has since been
+replaced by `test/e2e/wasmgc_backend_smoke.sh` (29 output assertions, registered)
+and now passes. The gate was not re-run end to end after that last fix.
+
+`test/run_all.sh` runs: `zig_build_test_wasmgc` (same test binary,
 `CLJW_BACKEND=wasmgc`), `corpus_regression_tree_walk`, `corpus_regression_wasmgc`,
-`backend_diff_three_way` (73 cases in `test/diff/backends/`, one process per
-backend; see `test/diff/README.md`) and `e2e_wasmgc` (sandboxed harness with the
-allow-list `test/wasmgc_known_failures.txt`). `cljw --compare` runs all three
-backends in-process.
+`backend_diff_three_way` (118 cases in `test/diff/backends/`, one process per
+backend; 2 accepted pre-existing TreeWalk/VM divergences in
+`known_divergences.txt`), `e2e_wasmgc_backend_smoke` and `e2e_wasmgc` (sandboxed
+harness with the allow-list `test/wasmgc_known_failures.txt`).
+`cljw --compare` runs all three backends in-process (heap values and errors
+report MISMATCH there by design; use `check_backend_diff.sh` for semantics).
+
+## Direction (decided in discussion, not yet implemented)
+
+Deployment targets: browser, Cloudflare Workers, standalone server (WASI).
+Requirement: a compiler for **full Clojure** to deployable `.wasm`, not a demo.
+
+What the current backend is: a native-hosted execution mode (WASM calls back into
+Zig host functions inside a native `cljw`, run by zwasm, with `wasm-tools`
+spawned per form). It cannot be deployed to any of the three targets. It stays
+valuable as the conformance/differential vehicle and as the compiler front end.
+
+Agreed architecture: compile to **standalone Wasm 3.0** (GC, exceptions via
+`try_table`, tail calls via `return_call`) so the engines do the work: values are
+WasmGC references, no interpreter and no VM in the artifact, no host process.
+Macros expand at build time; no runtime `eval`/`load-string` in the AOT artifact
+(same property as ClojureScript). The library layer is written in Clojure on a
+small set of compiler intrinsics (ClojureScript approach), ported from the Zig
+implementation (which matches JVM hash/iteration order that the golden corpus
+depends on), with a small hand-written WAT/intrinsic kernel.
+
+Measured size of the Zig layer to replace (lines): primitives 13,540 (~1,115
+builtins), collections 7,560, `java.*` emulation 11,134, regex 4,177, numerics
+3,216, printer+reader 3,096; ~43k total. The ~9.6k lines of Clojure in
+`src/lang/clj` (`core.clj`, spec, pprint, zip, ...) compile as-is once the Zig
+layer exists.
+
+Proposed tiers: T0 kernel (arrays, long/double, strings, hashing, interning,
+exceptions); T1 seqs + core collections; T2 protocols/multimethods/records/
+atoms/transducers; T3 strings/printer/reader/clojure.string; T4 bignum/ratio/
+bigdecimal and regex; T5 `java.*` per-platform subset; T6 single-threaded
+`future`/`agent` semantics. Network/files/threads are per-platform capability
+tiers, not parity items. Success metric per program: number of host imports it
+still needs (zero = deployable).
+
+Proposed first deliverables (all kept in the repo, no throwaway spikes):
+1. Inventory of the ~1,115 builtins (tier, corpus/core usage, portability).
+2. ADR: value representation (i31 vs boxed i64 for longs, string layout, closure
+   layout), calling convention, function table, exceptions, string encoding,
+   platform capability model.
+3. Engine-conformance fixtures (hand-written `.wat`, one per Wasm 3.0 feature the
+   compiler emits) run on zwasm, wasmtime, V8/Node, Chrome and Workers by a script
+   in the gate. (Workers' WasmGC support is undocumented; this settles it.)
+4. A walking skeleton in the production compiler (constants, locals, if, let,
+   fn/closures, loop/recur, try, in-module calls), differential-tested vs the VM.
+
+Facts to re-verify before relying on them (taken from web search, not checked
+against primary sources): Cloudflare Workers disallows runtime compilation of
+WASM from bytes (modules must be pre-compiled static imports) and is
+single-threaded; its size limit was reported as 64 MiB total; WasmGC shipped in
+Chrome 119, Firefox 120, Safari 18.2; wasmtime/WasmEdge/Wasmer report GC support.
+Also unchecked: licensing compatibility if any `cljs.core` source is reused
+(this repo's header is EPL-2.0).
+
+Findings from a probe: building cljw for `wasm32-wasi` currently fails first in
+`zwasm` (its native JIT supports only aarch64/x86_64); on this branch zwasm is
+linked unconditionally (`main` links it only with `-Dwasm`). Remaining errors
+after that are unknown.
+
+Open questions for the maintainer (unanswered when work paused):
+- Is `java.*` parity required, or a documented per-platform subset?
+- Full numeric tower from the first release, or longs/doubles first?
+- Must the artifact use real WasmGC values (this plan assumes yes)?
+- Server runtime(s) to support (wasmtime, WasmEdge, Wasmer, Node/Deno)?
+- Threads in the wasm build: synchronous `future`/`agent`/`pmap`, or concurrent?
+- How strict is the Cloudflare Workers size/startup budget?
+- Where to start: builtin inventory + ADR first, or close out this branch and open
+  the PR first (PR template at `.github/pull_request_template.md` must be used)?
