@@ -87,10 +87,23 @@ Reproduce: `BACKEND=wasmgc bash test/wasmgc_baseline.sh` (also `vm`,
 three backends by `test/clj/run.sh`, which requires byte-identical results; with
 `--jvm` the same source also runs on JVM Clojure as the oracle. Current suites
 (assertions): tier_a 13, features 18 (needs `eval`), regression 10, p99_lists 102
-(L-99 P01-P28), p99_arithmetic 44 (P31-P41), p99_logic 65 (P46-P50), p99_trees 154
-(P54-P69), p99_multitrees 32 (P70-P73), p99_graphs 66 (P80-P89), p99_puzzles 70
+(L-99 P01-P28), p99_arithmetic 43 (P31-P41), p99_logic 65 (P46-P50), p99_trees 154
+(P54-P69), p99_multitrees 32 (P70-P73), p99_graphs 66 (P80-P89), p99_puzzles 62
 (P90-P99), fourclojure 302 (problems 1-98 except 72 and 87, which the skeleton omits);
-all 11 suites agree on tree_walk, vm, wasmgc and JVM Clojure (31 s for all four).
+The latest default Debug run passed all 11 suites on tree_walk, vm and wasmgc
+in 460 seconds, skipping two explicit slow suites: p99_arithmetic_slow (6
+assertions) and p99_puzzles_slow (20 assertions). The latter includes 6x6/8x8
+knight tours that exceed the WasmGC native-stack budget in Debug; moving them
+out of the default gate does not fix that backend limitation.
+
+Before the latest arithmetic split, all suites including the puzzle slow suite
+passed on the three ReleaseSafe backends and JVM Clojure in about 31 seconds.
+The arithmetic split subsequently passed JVM Clojure (49 assertions across its
+two suites), but the final combined release/JVM re-run did NOT validate:
+the old `/tmp/one/bin/cljw` could not execute and `clj` was no longer available.
+Rebuild a release binary and restore the JVM oracle before rerunning
+`CLJW_BIN=<release-binary> bash test/clj/run.sh --all-backends --jvm --include-slow`.
+The WasmGC unit suite also still needs rerunning after the fuel change.
 The suite found two real bugs: `empty` raised on ranges and every lazy seq (now `()`
 like JVM, with a differential case), and wasmgc died with `OutOfFuel` after zwasm's
 default 1e9 instructions (now unmetered; the Clojure eval budget still bounds runaway

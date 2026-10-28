@@ -55,3 +55,15 @@ agrees. (Requires `clj`; not part of the gate.)
 ## Adding a regression test
 Put the file in `regression/`, add a line to `support/suites.txt` (or extend the
 existing suite's file list), and keep the file free of `run-tests` calls.
+
+## Slow workloads
+
+The default gate includes every implemented L-99 problem, with bounded inputs.
+`--include-slow` additionally runs the large totient/Goldbach cases and the
+larger regular-graph and knight-tour cases. Their separate manifest entries
+retain minimum assertion counts; they are not silently dropped.
+
+Use a ReleaseSafe binary for the full slow run. The 6x6/8x8 knight tours
+currently exceed WasmGC's native-stack budget in Debug even though they passed
+in ReleaseSafe. Skipping the slow suite in the default gate is not proof of
+Debug equivalence for those inputs.

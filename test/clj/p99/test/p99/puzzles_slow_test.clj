@@ -8,9 +8,9 @@
          (map (fn [[n k]] (count (p/regular-graphs n k))) [[7 2] [7 4] [7 6] [7 0]])))
   (is (= 0 (count (p/regular-graphs 7 3)))))
 
-(deftest p91-knights-tour-8x8-from-corners
-  (doseq [start [[1 1] [1 8] [8 1] [8 8] [4 5]]]
-    (let [tour (p/knights-tour 8 start)]
-      (is (= 64 (count (set tour))))
+(deftest p91-knights-tour-6x6-and-8x8
+  (doseq [[n start] [[6 [1 1]] [8 [1 1]] [8 [1 8]] [8 [8 1]] [8 [8 8]] [8 [4 5]]]]
+    (let [tour (p/knights-tour n start)]
+      (is (= (* n n) (count (set tour))))
       (is (= start (first tour)))
       (is (every? (fn [[a b]] (p/knight-step? a b)) (partition 2 1 tour))))))
