@@ -74,10 +74,9 @@ Reproduce: `BACKEND=wasmgc bash test/wasmgc_baseline.sh` (also `vm`,
   the backend is not standalone.
 - Slower and larger than the VM (see unit-suite figures above).
 - Per-form `wasm-tools` subprocess (needs `wasm-tools` on `PATH`).
-- `e2e_phase14_eval` fails in the full gate on the VM as well as the other
-  backends. Not verified against a clean `main` (building `main` in `/tmp` was
-  denied); believed pre-existing since the branch does not touch stdin echo.
-  To check: on a `main` checkout run `zig build -Dwasm && bash test/e2e/phase14_eval.sh`.
+- `e2e_phase14_eval` (3 of 21 cases) fails on every backend. Verified
+  pre-existing: passes on clean `main`, fails at `dcd93cd4` (see below). Not a
+  WasmGC regression, and not fixed here.
 - `accepted_divergences` and `compat_members` gate steps fail on this machine
   only because `yq` is not installed.
 
@@ -106,11 +105,18 @@ like JVM, with a differential case), and wasmgc died with `OutOfFuel` after zwas
 default 1e9 instructions (now unmetered; the Clojure eval budget still bounds runaway
 code). Gate steps: `test_clj_tier_a`, `test_clj_suites`.
 
-Full `test/run_all.sh` (this machine, 23 min): 436 passed, 4 failed. The four are
-the two `yq` steps, `e2e_phase14_eval` (above), and `e2e_reach`, which was an
-orphaned vacuous script (`wasmgc_simple_arithmetic.sh`) that has since been
-replaced by `test/e2e/wasmgc_backend_smoke.sh` (29 output assertions, registered)
-and now passes. The gate was not re-run end to end after that last fix.
+Full `test/run_all.sh` at `c5f7742b` (this machine, 22.5 min): **439 passed, 3
+failed**, all three failures outside the WasmGC work:
+- `accepted_divergences` and `compat_members`: `yq` is not installed here.
+- `e2e_phase14_eval` (3 of 21 cases): verified pre-existing. It passes 15/15 on
+  clean `main`, and fails identically at `dcd93cd4` (the fork's own 2023-10-13
+  "use rt.load_arena" commit that added those 3 cases), before any WasmGC code
+  existed. The eval'd-function-survives-GC cases return empty output on the
+  tree-walk build; the underlying eval use-after-free fix looks incomplete.
+  Not touched here.
+
+`zig_build_test_wasmgc` (271 s), `corpus_regression_wasmgc`, `backend_diff_three_way`,
+`e2e_wasmgc` (allow-list) and `test_clj_suites` all pass.
 
 `test/run_all.sh` runs: `zig_build_test_wasmgc` (same test binary,
 `CLJW_BACKEND=wasmgc`), `corpus_regression_tree_walk`, `corpus_regression_wasmgc`,
