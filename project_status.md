@@ -98,12 +98,9 @@ out of the default gate does not fix that backend limitation.
 
 Before the latest arithmetic split, all suites including the puzzle slow suite
 passed on the three ReleaseSafe backends and JVM Clojure in about 31 seconds.
-The arithmetic split subsequently passed JVM Clojure (49 assertions across its
-two suites), but the final combined release/JVM re-run did NOT validate:
-the old `/tmp/one/bin/cljw` could not execute and `clj` was no longer available.
-Rebuild a release binary and restore the JVM oracle before rerunning
+After the arithmetic split, a rebuilt ReleaseSafe binary passed all 13 suites
+(slow ones included) on tree_walk, vm, wasmgc and JVM Clojure in 34 seconds:
 `CLJW_BIN=<release-binary> bash test/clj/run.sh --all-backends --jvm --include-slow`.
-The WasmGC unit suite also still needs rerunning after the fuel change.
 The suite found two real bugs: `empty` raised on ranges and every lazy seq (now `()`
 like JVM, with a differential case), and wasmgc died with `OutOfFuel` after zwasm's
 default 1e9 instructions (now unmetered; the Clojure eval budget still bounds runaway
