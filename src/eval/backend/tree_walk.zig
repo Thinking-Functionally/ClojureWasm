@@ -32,6 +32,7 @@
 
 const std = @import("std");
 const root_set = @import("../../runtime/gc/root_set.zig");
+const stack_guard = @import("../../runtime/stack_guard.zig");
 const Value = @import("../../runtime/value/value.zig").Value;
 const HeapHeader = @import("../../runtime/value/value.zig").HeapHeader;
 const Runtime = @import("../../runtime/runtime.zig").Runtime;
@@ -438,12 +439,12 @@ pub fn allocFunctionFromSerialized(
 /// deep user recursion (or a self-triggering watch's notify→swap!→notify
 /// chain) overflows the native stack → SIGSEGV where the VM raises the
 /// catchable stack_overflow. Anchor to the shallowest `eval` entry seen on
-/// this thread and raise once the REAL bytes consumed exceed the same 6 MiB
-/// budget. The anchor LIVES in root_set (`conservative_stack_top`) — it
-/// doubles as the D-556 conservative-scan upper bound, one anchor for both
-/// concerns. Per-node cost is a threadlocal read + two compares.
-const STACK_BUDGET_BYTES: usize = 6 * 1024 * 1024;
-
+/// this thread and raise once the REAL bytes consumed exceed the thread's
+/// `stack_guard.budget` (6 MiB unless the thread declared a bigger stack). The
+/// anchor LIVES in root_set (`conservative_stack_top`) — it doubles as the
+/// D-556 conservative-scan upper bound, one anchor for both concerns. Per-node
+/// cost is a threadlocal read + two compares.
+///
 /// Evaluate one Node into a Value. `locals` is the slot array owned
 /// by the caller — typically a fixed 256-entry stack array.
 pub fn eval(
@@ -456,8 +457,8 @@ pub fn eval(
         const sp = @frameAddress();
         if (root_set.conservative_stack_top == 0 or sp > root_set.conservative_stack_top) {
             root_set.conservative_stack_top = sp; // (re-)anchor to the shallowest (highest) entry seen
-        } else if (root_set.conservative_stack_top - sp > STACK_BUDGET_BYTES) {
-            return error_catalog.raise(.stack_overflow, .{}, .{ .max = STACK_BUDGET_BYTES });
+        } else if (root_set.conservative_stack_top - sp > stack_guard.budget) {
+            return error_catalog.raise(.stack_overflow, .{}, .{ .max = stack_guard.budget });
         }
     }
     return switch (node.*) {

@@ -19,6 +19,21 @@ const std = @import("std");
 const cli = @import("app/cli.zig");
 const error_render = @import("app/error_render.zig");
 const io_default = @import("runtime/concurrency/io_default.zig");
+const stack_guard = @import("runtime/stack_guard.zig");
+
+/// The program runs on a thread with `stack_guard.main_stack_bytes` of stack so
+/// deep Clojure recursion has room (the OS main thread is fixed at ~8 MiB).
+const Main = struct {
+    init: std.process.Init,
+    err: ?anyerror = null,
+
+    fn run(self: *Main) void {
+        stack_guard.adoptStackSize(stack_guard.main_stack_bytes);
+        cli.dispatch(self.init) catch |e| {
+            self.err = e;
+        };
+    }
+};
 
 pub fn main(init: std.process.Init) !void {
     // Upgrade the process-wide `io_default` singleton from its lazy
@@ -30,7 +45,14 @@ pub fn main(init: std.process.Init) !void {
     // single-threaded default (a per-test threaded io is set where needed), so
     // `io_default` never dangles at a freed test-local `Threaded`.
     io_default.set(init.io);
-    try cli.dispatch(init);
+    var m: Main = .{ .init = init };
+    const t = std.Thread.spawn(stack_guard.spawnConfig(stack_guard.main_stack_bytes), Main.run, .{&m}) catch {
+        // No room for the big stack (e.g. a tight address-space limit): run on
+        // this thread with the default 6 MiB budget.
+        return cli.dispatch(init);
+    };
+    t.join();
+    if (m.err) |e| return e;
 }
 
 test "smoke: main module loads" {
@@ -91,6 +113,7 @@ test {
     _ = @import("runtime/gc/mark_sweep.zig");
     _ = @import("runtime/gc/free_pool.zig");
     _ = @import("runtime/gc/root_set.zig");
+    _ = @import("runtime/stack_guard.zig");
     _ = @import("runtime/gc/gc_torture.zig");
     _ = @import("runtime/concurrency/io_default.zig");
     _ = @import("runtime/concurrency/safepoint.zig");

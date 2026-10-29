@@ -38,6 +38,7 @@ const map_collection = @import("../../runtime/collection/map.zig");
 const set_collection = @import("../../runtime/collection/set.zig");
 const error_catalog = @import("../../runtime/error/catalog.zig");
 const root_set = @import("../../runtime/gc/root_set.zig");
+const stack_guard = @import("../../runtime/stack_guard.zig");
 const eval_budget_mod = @import("../../runtime/concurrency/eval_budget.zig");
 
 /// Map zwasm's own resource traps onto the Clojure errors TreeWalk/VM raise.
@@ -45,7 +46,7 @@ fn realError(s: *State, e: anyerror) anyerror {
     const real = s.err orelse e;
     s.err = null;
     if (real == error.CallStackExhausted)
-        return error_catalog.raise(.stack_overflow, .{}, .{ .max = STACK_BUDGET_BYTES });
+        return error_catalog.raise(.stack_overflow, .{}, .{ .max = stack_guard.budget });
     return real;
 }
 
@@ -56,9 +57,6 @@ const HANDLE_CAP: usize = 32768;
 /// zwasm caps one instance at 256 wasm frames; continue on a fresh instance
 /// well before that (an activation can use a few frames: method + thunks).
 const MAX_WASM_DEPTH: u32 = 100;
-
-/// Native-stack budget for Clojure recursion (same value as TreeWalk's).
-const STACK_BUDGET_BYTES: usize = 6 * 1024 * 1024;
 
 pub const MAX_CALL_ARGS = 7;
 
@@ -817,8 +815,8 @@ fn runMethod(ctx: *anyopaque, rt: *Runtime, env: *Env, locals: []Value) anyerror
         const sp = @frameAddress();
         if (root_set.conservative_stack_top == 0 or sp > root_set.conservative_stack_top) {
             root_set.conservative_stack_top = sp;
-        } else if (root_set.conservative_stack_top - sp > STACK_BUDGET_BYTES) {
-            return error_catalog.raise(.stack_overflow, .{}, .{ .max = STACK_BUDGET_BYTES });
+        } else if (root_set.conservative_stack_top - sp > stack_guard.budget) {
+            return error_catalog.raise(.stack_overflow, .{}, .{ .max = stack_guard.budget });
         }
     }
     var s = try ref.state.forThread();

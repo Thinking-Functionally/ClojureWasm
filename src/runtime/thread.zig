@@ -32,6 +32,7 @@ const Value = value_mod.Value;
 const Runtime = @import("runtime.zig").Runtime;
 const Env = @import("env.zig").Env;
 const root_set = @import("gc/root_set.zig");
+const stack_guard = @import("stack_guard.zig");
 const io_default = @import("concurrency/io_default.zig");
 const eval_budget = @import("concurrency/eval_budget.zig");
 const lock_tx = @import("concurrency/lock_tx.zig");
@@ -153,7 +154,7 @@ pub fn start(rt: *Runtime, thread_val: Value, loc: SourceLocation) !Value {
     // returns at the done-broadcast, BEFORE the worker's unpin epilogue, so
     // even a joined Thread needs the exit boundary to see its live count.
     root_set.noteWorkerSpawned();
-    var t = std.Thread.spawn(.{}, worker, .{thread_val}) catch |e| {
+    var t = std.Thread.spawn(stack_guard.spawnConfig(stack_guard.worker_stack_bytes), worker, .{thread_val}) catch |e| {
         root_set.noteWorkerExited();
         if (st.budget) |b| b.unref();
         st.budget = null;
@@ -170,6 +171,7 @@ pub fn start(rt: *Runtime, thread_val: Value, loc: SourceLocation) !Value {
 /// Worker body — future.zig's discipline: publish GC roots, run the thunk
 /// on the VM, mark done + wake joiners, drop the thunk edge, unpin.
 fn worker(thread_val: Value) void {
+    stack_guard.adoptStackSize(stack_guard.worker_stack_bytes);
     // FIRST defer → runs LAST: the teardown guard may only see 0 once every
     // heap-touching cleanup below (done store, unpin, unregister) completed.
     defer root_set.noteWorkerExited();

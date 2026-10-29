@@ -46,6 +46,7 @@ const Runtime = @import("runtime.zig").Runtime;
 const Env = @import("env.zig").Env;
 const env_mod = @import("env.zig");
 const root_set = @import("gc/root_set.zig");
+const stack_guard = @import("stack_guard.zig");
 const io_default = @import("concurrency/io_default.zig");
 const tag_ops = @import("gc/tag_ops.zig");
 const gc_heap_mod = @import("gc/gc_heap.zig");
@@ -370,11 +371,10 @@ fn enqueueDirect(rt: *Runtime, agent_val: Value, action: Action) !void {
     io_default.unlockMutex(&a.cell.mutex);
 
     if (need_spawn) {
-        // Keep the agent alive for the drainer even if the caller drops it.
         try rt.gc.pin(agent_val);
         // Teardown guard (ADR-0176): account the drainer BEFORE spawn.
         root_set.noteWorkerSpawned();
-        var t = std.Thread.spawn(.{}, drainer, .{a}) catch |e| {
+        var t = std.Thread.spawn(stack_guard.spawnConfig(stack_guard.worker_stack_bytes), drainer, .{a}) catch |e| {
             root_set.noteWorkerExited();
             io_default.lockMutex(&a.cell.mutex);
             a.cell.draining = false;
@@ -390,6 +390,7 @@ fn enqueueDirect(rt: *Runtime, agent_val: Value, action: Action) !void {
 /// `ThreadGcContext` so a concurrent collect parks it at a safepoint and walks
 /// its operand-stack roots (the in-flight action), like `future.worker`.
 fn drainer(a: *Agent) void {
+    stack_guard.adoptStackSize(stack_guard.worker_stack_bytes);
     // FIRST defer → runs LAST: the teardown guard may only see 0 once every
     // heap-touching cleanup below (state stores, unpin, unregister) completed.
     defer root_set.noteWorkerExited();
@@ -613,7 +614,7 @@ pub fn restart(rt: *Runtime, agent_val: Value, new_state: Value, clear_actions: 
         try rt.gc.pin(agent_val);
         // Teardown guard (ADR-0176): account the drainer BEFORE spawn.
         root_set.noteWorkerSpawned();
-        var t = std.Thread.spawn(.{}, drainer, .{a}) catch |e| {
+        var t = std.Thread.spawn(stack_guard.spawnConfig(stack_guard.worker_stack_bytes), drainer, .{a}) catch |e| {
             root_set.noteWorkerExited();
             io_default.lockMutex(&a.cell.mutex);
             a.cell.draining = false;

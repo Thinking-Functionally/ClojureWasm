@@ -32,6 +32,7 @@ const HeapHeader = value_mod.HeapHeader;
 const Runtime = @import("runtime.zig").Runtime;
 const Env = @import("env.zig").Env;
 const root_set = @import("gc/root_set.zig");
+const stack_guard = @import("stack_guard.zig");
 const io_default = @import("concurrency/io_default.zig");
 const Latch = @import("concurrency/latch.zig").Latch;
 const eval_budget = @import("concurrency/eval_budget.zig");
@@ -155,7 +156,7 @@ pub fn alloc(rt: *Runtime, env: *Env, thunk: Value, loc: SourceLocation) !Value 
     // Teardown guard (ADR-0176): account the worker BEFORE spawn so the exit
     // boundary sees it even while the thread is still starting up.
     root_set.noteWorkerSpawned();
-    var t = std.Thread.spawn(.{}, worker, .{f}) catch |e| {
+    var t = std.Thread.spawn(stack_guard.spawnConfig(stack_guard.worker_stack_bytes), worker, .{f}) catch |e| {
         root_set.noteWorkerExited();
         if (f.budget) |b| b.unref();
         f.budget = null;
@@ -170,6 +171,7 @@ pub fn alloc(rt: *Runtime, env: *Env, thunk: Value, loc: SourceLocation) !Value 
 /// + wake deref'ers, unpin. Runs on a fresh thread with its own threadlocal GC
 /// slots (no conveyed dynamic bindings yet — binding conveyance is a follow-up).
 fn worker(f: *Future) void {
+    stack_guard.adoptStackSize(stack_guard.worker_stack_bytes);
     // FIRST defer → runs LAST: the teardown guard may only see 0 once every
     // heap-touching cleanup below (result store, unpin, unregister) completed.
     defer root_set.noteWorkerExited();

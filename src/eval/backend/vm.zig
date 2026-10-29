@@ -30,6 +30,7 @@ const map_mod = @import("../../runtime/collection/map.zig");
 const set_mod = @import("../../runtime/collection/set.zig");
 const dispatch = @import("../../runtime/dispatch.zig");
 const root_set = @import("../../runtime/gc/root_set.zig");
+const stack_guard = @import("../../runtime/stack_guard.zig");
 const mark_sweep = @import("../../runtime/gc/mark_sweep.zig");
 const gc_torture = @import("../../runtime/gc/gc_torture.zig");
 const safepoint = @import("../../runtime/concurrency/safepoint.zig");
@@ -117,7 +118,6 @@ threadlocal var vm_arena: VmArena = .{};
 /// it is immune to the per-frame-size / optimization-level / platform variance
 /// that makes a fixed frame-COUNT cap a cross-host SIGSEGV.
 threadlocal var stack_base: usize = 0;
-const STACK_BUDGET_BYTES: usize = 6 * 1024 * 1024;
 
 /// An in-VM call frame. A flattened `op_call` pushes one + continues
 /// the SAME eval loop (no host `eval` re-entry); `op_ret` pops it. Each carries
@@ -223,8 +223,8 @@ pub fn eval(
         const sp = @frameAddress();
         if (stack_base == 0 or sp > stack_base) {
             stack_base = sp; // (re-)anchor to the shallowest (highest) entry seen
-        } else if (stack_base - sp > STACK_BUDGET_BYTES) {
-            return error_catalog.raise(.stack_overflow, .{}, .{ .max = STACK_BUDGET_BYTES });
+        } else if (stack_base - sp > stack_guard.budget) {
+            return error_catalog.raise(.stack_overflow, .{}, .{ .max = stack_guard.budget });
         }
     }
     // Borrow this invocation's operand + locals + frame regions
