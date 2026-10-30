@@ -183,7 +183,15 @@ All three backends now clear ClojureScript's ~9,700. Where the depth comes from:
   `max_frame_stack = 256` cap and native-stack recursion per call. Not worth a
   dependency bump, so the pin stays at v2.7.0.
 
-Implications for the standalone compiler: a browser engine gives roughly
+**Baseline policy (decided 2026-10-30).** JVM Clojure is the oracle for
+*behaviour* on every backend: values, errors and results must match it, enforced
+by `test/clj/run.sh --jvm`. For *depth* the contract is a fixed floor (the
+`depth` suite), not JVM parity: JVM reaches ~214,000 direct calls, which no
+native-stack backend or browser engine can match, so the gap is reported in the
+table above and deliberately not tested. Matching it would need an explicit
+heap-allocated call stack in every backend.
+
+Implications for the wasm build target: a browser engine gives roughly
 10k wasm calls for a small frame and fewer for realistic ones, so
 ClojureScript-level depth is the ceiling there unless the design uses an
 explicit heap-allocated call stack. A design that re-enters wasm through host
@@ -193,7 +201,13 @@ required, and frames must stay small.
 ## Direction (decided in discussion, not yet implemented)
 
 Deployment targets: browser, Cloudflare Workers, standalone server (WASI).
-Requirement: a compiler for **full Clojure** to deployable `.wasm`, not a demo.
+Requirement: `cljw` must generate deployable `.wasm` for **full Clojure**, not a
+demo. This is not a separate compiler program: it is a new target of the
+existing `cljw build` subcommand (today `cljw build in.clj -o out` emits a native
+binary with the runtime embedded; the new targets would be `--target
+browser|worker|wasi` emitting compiled `.wasm` with no VM or interpreter inside).
+The reader, analyzer and `Node` tree are reused; only the output stage is new.
+"Standalone" below refers to that artifact, not to a second tool.
 
 What the current backend is: a native-hosted execution mode (WASM calls back into
 Zig host functions inside a native `cljw`, run by zwasm, with `wasm-tools`
