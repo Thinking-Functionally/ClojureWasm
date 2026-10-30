@@ -17,6 +17,8 @@ test/clj/
   regression/            one file per fixed bug (min_max_key_test.clj)
   p99/                   L-99 ("Ninety-Nine Lisp Problems") in Clojure, src/ + test/
   fourclojure/           the 4clojure problems, solutions + enabled tests
+  depth/                 recursion-depth contract: deep recursion works, runaway
+                         recursion is a catchable StackOverflowError, recovery
 ```
 
 `p99/reference/` holds the original Common Lisp solutions (MIT, upstream LICENSE

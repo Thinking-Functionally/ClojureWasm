@@ -165,6 +165,16 @@ All three backends now clear ClojureScript's ~9,700. Where the depth comes from:
   15,000-deep recursion peaks at 14 MB. Going past ~16k frames needs
   `EvalFrame.sp` and the VM's operand indexes widened from `u16` (touches the
   GC, TreeWalk and WasmGC).
+- **Regression test**: `test/clj/depth/` (suite `depth`, 23 assertions) asserts
+  the contract on every backend and JVM Clojure: direct recursion to 5,000,
+  mutual 2,000, through `map`/`reduce` 1,000, inside futures 1,000, variadic 200
+  (JVM's own apply-through-variadic limit is ~270), 200k-iteration `recur`
+  without stack growth, catchable overflow on the main thread and in a future
+  (repeatedly), and full recovery afterwards. The depths sit far below every
+  backend's real limit, so the test never depends on the exact limit. It fails on
+  the pre-change binary on all three backends. Cost: a runaway recursion
+  touches the whole stack, so the suite peaks at ~0.7 GB (TreeWalk) / ~1.1 GB
+  (WasmGC) RSS on a Debug build; ~5 s per backend.
 - **WasmGC** is bound by zwasm's interpreter loop (`dispatch.run`, a ~21 KB
   frame per wasm re-entry), not by cljw. Only direct wasm-to-wasm calls remove
   it; that is part of the standalone compiler. zwasm v2.8.1 was built and

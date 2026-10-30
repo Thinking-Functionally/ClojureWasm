@@ -27,3 +27,4 @@ p99_multitrees|ns|p99/src,p99/test|p99.multitrees-test|32|-|no
 p99_graphs|ns|p99/src,p99/test|p99.graphs-test|66|-|no
 p99_puzzles|ns|p99/src,p99/test|p99.puzzles-test|62|-|no
 p99_puzzles_slow|ns|p99/src,p99/test|p99.puzzles-slow-test|20|-|yes
+depth|ns|depth/test|depth.recursion-test|23|-|no
