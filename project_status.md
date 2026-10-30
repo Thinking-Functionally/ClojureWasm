@@ -138,18 +138,36 @@ depth before `StackOverflowError`:
 | ClojureScript on Node/V8 | ~9,700 (through `map`: ~1,100) |
 | Raw wasm in V8, small frame | ~10,400 (frame with 14 extra locals: ~4,800; 30: ~3,000) |
 | Wasm calling back through a JS import | ~900 |
-| cljw TreeWalk | 225 before, **19,200** now |
-| cljw WasmGC | 168 before, **14,800** now |
-| cljw VM | 2,000 (its own `FRAMES_MAX`; unchanged, now the shallowest) |
+| cljw TreeWalk | 225 before, **59,200** now (through `map`: 2,000 before, 16,000 now) |
+| cljw WasmGC | 168 before, **15,200** now (bound by zwasm's interpreter loop, see below) |
+| cljw VM | 2,000 before, **16,000** now (through `map`: 8,000) |
 
-`src/runtime/stack_guard.zig` derives each thread's budget from its real stack:
-the program runs on a 512 MiB thread, workers get 128 MiB, anything else keeps
-6 MiB. `CLJW_STACK_MB` (16..4096) overrides the main stack. Memory is
-proportional to depth, not a leak: ~27 KB per call on TreeWalk (~35 KB WasmGC).
-Idle RSS is unchanged (14 MB); a runaway recursion fills the stack before the
-catchable overflow (TreeWalk 524 MB, WasmGC 760 MB at 512 MiB). Choose by
-container size: 64 MiB gives 2.4k / 1.8k deep and 76 MB peak; 128 MiB 4.8k /
-3.6k; 256 MiB 9.6k / 7.2k; 512 MiB (default) 19.2k / 14.8k.
+All three backends now clear ClojureScript's ~9,700. Where the depth comes from:
+
+- **Stack budget** (`src/runtime/stack_guard.zig`): each thread's budget is
+  derived from its real stack. The program runs on a 512 MiB thread, workers get
+  128 MiB, anything else keeps 6 MiB. `CLJW_STACK_MB` (16..4096) overrides the
+  main stack. A runaway recursion fills the stack before the catchable overflow
+  (TreeWalk ~524 MB, WasmGC ~770 MB at 512 MiB), so lower it for small
+  containers: at 128 MiB TreeWalk still reaches 14,800 and peaks at ~140 MB.
+- **TreeWalk frames**: a call cost ~27 KB of native stack because `evalCall`
+  carried worst-case argument buffers (8.7 KB, twice per call) and
+  `callMethodImpl` a 256-slot locals array. Both are now sized to the call
+  (non-inlined comptime variants), ~9 KB per call. Per-function frame sizes can
+  be re-measured with `zig build -Doptimize=ReleaseSafe -Dprofile=true` and
+  `otool -tV` (look for `sub sp, sp, #N`).
+- **VM**: `FRAMES_MAX` 2,048 -> 16,384 and the operand/locals arenas now span
+  the whole `u16` index range, with an explicit headroom check so running out is
+  a catchable overflow rather than an index panic. The arena is ~4.5 MB, so it
+  is no longer a `threadlocal` array (that committed it for every thread): it is
+  mapped lazily per thread and unmapped by a pthread-key destructor at thread
+  exit. Result: idle RSS 13 -> 11 MB, 200 concurrent futures 106 -> 40 MB, a
+  15,000-deep recursion peaks at 14 MB. Going past ~16k frames needs
+  `EvalFrame.sp` and the VM's operand indexes widened from `u16` (touches the
+  GC, TreeWalk and WasmGC).
+- **WasmGC** is bound by zwasm's interpreter loop (`dispatch.run`, a ~21 KB
+  frame per wasm re-entry), not by cljw. Only direct wasm-to-wasm calls remove
+  it; that is part of the standalone compiler.
 
 Implications for the standalone compiler: a browser engine gives roughly
 10k wasm calls for a small frame and fewer for realistic ones, so

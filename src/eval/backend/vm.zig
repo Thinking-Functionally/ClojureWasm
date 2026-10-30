@@ -85,11 +85,17 @@ const Handler = struct {
 /// `op_top` is restored to `op_base` on return. The live prefix
 /// `stack[0..op_top]` is GC-rooted via the EvalFrame. `ARENA_SLOTS` is sized so
 /// `op_top` stays within `u16`, keeping `root_set.EvalFrame.sp` unchanged.
-const ARENA_SLOTS: usize = 1 << 14; // 16384; keeps `op_top` within u16
+const ARENA_SLOTS: usize = std.math.maxInt(u16); // keeps `op_top` within u16
+/// Operand/locals slots a single frame may still need after the entry checks.
+/// A chunk records no operand high-water mark, so entry requires this much
+/// room: running out raises the catchable stack_overflow instead of indexing
+/// past the arena.
+const FRAME_HEADROOM: usize = 512;
 /// In-VM call-frame stack ceiling. A flattened `op_call` pushes one
 /// `VmFrame`; exceeding this → catchable `StackOverflow` (matches clj). The
-/// operand arena (~8 slots/fib-frame) caps comparable depth, so the two align.
-const FRAMES_MAX: usize = 2048;
+/// operand arena (a few slots per frame) bounds depth too, whichever is hit
+/// first; both raise the same catchable error.
+const FRAMES_MAX: usize = 16384;
 /// The thread's reusable VM arenas: the operand stack + its parallel loc stack +
 /// the flattened-call-frame locals arena + the in-VM frame stack, as inline
 /// arrays so the storage is threadlocal STATIC (BSS, demand-paged) — nothing to
@@ -107,7 +113,55 @@ const VmArena = struct {
     frames: [FRAMES_MAX]VmFrame = undefined,
     frame_top: u16 = 0,
 };
-threadlocal var vm_arena: VmArena = .{};
+
+/// The arena is ~4.5 MB, so it is NOT a `threadlocal` array: that commits the
+/// whole block for every thread that exists (each future/agent/Thread paid it
+/// whether or not it ran a VM chunk). It is mapped lazily on a thread's first
+/// VM eval from the page allocator — zero pages are only committed when
+/// touched — and unmapped by a pthread-key destructor when the thread exits.
+threadlocal var vm_arena_ptr: ?*VmArena = null;
+var arena_key: std.c.pthread_key_t = undefined;
+var arena_key_ok: bool = false;
+/// 0 = key not created, 1 = being created, 2 = ready.
+var arena_key_state = std.atomic.Value(u8).init(0);
+
+fn arenaSlice(p: *VmArena) []align(@alignOf(VmArena)) u8 {
+    const bytes: [*]align(@alignOf(VmArena)) u8 = @ptrCast(p);
+    return bytes[0..@sizeOf(VmArena)];
+}
+
+fn releaseArena(p: ?*anyopaque) callconv(.c) void {
+    const arena: *VmArena = @ptrCast(@alignCast(p orelse return));
+    std.heap.page_allocator.rawFree(arenaSlice(arena), .of(VmArena), @returnAddress());
+}
+
+fn ensureArenaKey() void {
+    while (arena_key_state.load(.acquire) != 2) {
+        if (arena_key_state.cmpxchgStrong(0, 1, .acq_rel, .acquire) == null) {
+            // Without the key the arena is simply never unmapped: a leak, not a failure.
+            arena_key_ok = std.c.pthread_key_create(&arena_key, releaseArena) == .SUCCESS;
+            arena_key_state.store(2, .release);
+        }
+    }
+}
+
+noinline fn mapArena() !*VmArena {
+    ensureArenaKey();
+    // rawAlloc, not alignedAlloc: safe builds fill fresh `Allocator` memory with
+    // 0xAA, which would commit every page of the arena up front.
+    const mem = std.heap.page_allocator.rawAlloc(@sizeOf(VmArena), .of(VmArena), @returnAddress()) orelse return error.OutOfMemory;
+    const p: *VmArena = @ptrCast(@alignCast(mem));
+    p.op_top = 0;
+    p.local_top = 0;
+    p.frame_top = 0;
+    if (arena_key_ok) _ = std.c.pthread_setspecific(arena_key, p);
+    vm_arena_ptr = p;
+    return p;
+}
+
+inline fn threadArena() !*VmArena {
+    return vm_arena_ptr orelse mapArena();
+}
 
 /// Per-thread native-stack guard state (design record: ADR-0157). `stack_base`
 /// anchors to the shallowest (highest-address) `eval` entry seen on THIS thread
@@ -162,6 +216,8 @@ fn flattenPush(rt: *Runtime, ar: *VmArena, fr: FlattenReq) !void {
     if (ar.frame_top >= FRAMES_MAX)
         return error_catalog.raise(.stack_overflow, fr.call_loc, .{ .max = FRAMES_MAX });
     if (@as(usize, ar.local_top) + tree_walk.MAX_LOCALS > ARENA_SLOTS)
+        return error_catalog.raise(.stack_overflow, fr.call_loc, .{ .max = ARENA_SLOTS });
+    if (@as(usize, ar.op_top) + FRAME_HEADROOM > ARENA_SLOTS)
         return error_catalog.raise(.stack_overflow, fr.call_loc, .{ .max = ARENA_SLOTS });
     const args = ar.stack[@as(usize, fr.result_slot) + 1 ..][0..fr.arg_count];
     const local_base = ar.local_top;
@@ -231,7 +287,7 @@ pub fn eval(
     // from the per-thread arena; restore all watermarks + the eval-frame chain
     // head on exit (normal OR a thrown error propagating out — the latter pops
     // every still-live flattened frame's gc_frame at once and frees its windows).
-    const ar = &vm_arena;
+    const ar = try threadArena();
     const op_base = ar.op_top;
     const local_base_entry = ar.local_top;
     const frame_base = ar.frame_top;
@@ -256,6 +312,8 @@ pub fn eval(
     }
     if (ar.frame_top >= FRAMES_MAX)
         return error_catalog.raise(.stack_overflow, .{}, .{ .max = FRAMES_MAX });
+    if (@as(usize, ar.op_top) + FRAME_HEADROOM > ARENA_SLOTS)
+        return error_catalog.raise(.stack_overflow, .{}, .{ .max = ARENA_SLOTS });
 
     var handlers: [HANDLER_STACK_MAX]Handler = undefined;
     var handler_count: u16 = 0;
