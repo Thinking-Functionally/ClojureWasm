@@ -298,7 +298,49 @@ Decided in discussion, 2026-10-30:
   Acceptance: the corpus (collections must keep the JVM hash order) and `test/clj`.
 - **Behaviour baseline is JVM Clojure** (`--jvm`); depth is a fixed floor (above).
 
-Proposed, awaiting maintainer confirmation:
+Decided 2026-10-30 (late evening), the maintainer confirmed all seven:
+1. **Calling convention A**: Clojure calls are wasm calls on the engine stack. No
+   heap-allocated call stack for now; revisit only if a real program needs more depth.
+2. **A compiled-in depth counter is required.** A wasm stack overflow is an
+   uncatchable trap (it kills the call, and a Worker's request), so without a counter
+   `(try ... (catch StackOverflowError))` cannot work. The limit is a mutable global
+   the host can set at startup, with a conservative default per `--target`, and it
+   must sit below the engine's real limit (unknown at compile time).
+3. **Depth contract is a floor per platform, declared in the manifest.** Universal
+   floor 1,000 (ClojureScript ~1,100 and JVM ~2,800 through `map`); the existing
+   5,000 for platforms that declare they meet it. Set the real numbers only after
+   the walking skeleton, using real compiled frames (the probes' frames are tiny).
+4. **Supported engines.** Tier 1: V8 (Chrome, Node, Deno, Workers), wasmtime, zwasm
+   JIT (aarch64/x86_64 only). Tier 2, best effort: JavaScriptCore/Bun, Firefox,
+   Safari. Unsupported: the zwasm interpreter (hard 250-call cap); document it.
+5. **No dependence on tail calls.** `recur` compiles to a wasm loop; only
+   `trampoline` needs anything else.
+6. **Exceptions are the one feature to verify per engine**: use Wasm 3.0 `try_table`
+   but test it on every Tier-1 engine in a conformance fixture before the ADR; fall
+   back to result-code checks at call sites if any engine fails.
+7. **`wasm-tools`**: require it on `PATH` with a version check and a clear error;
+   do not bundle yet; emit one module per build, not one spawn per form.
+
+Scope, restated and accepted: `java.*` as a documented per-platform subset; longs
+and doubles first with ratios soon after (the corpus uses them); single-threaded
+with `future`/`agent`/`pmap` synchronous or absent behind capability flags; Workers
+size budget measured on the walking skeleton before a target is chosen.
+
+Next steps, in order:
+1. Turn the throwaway probes (feature + depth, currently `/tmp/plat`, not kept) into
+   a repo script, `scripts/check_wasm_engines.sh`, that runs on every engine
+   installed (here: Node/V8, Bun/JSC, wasmtime 50, and zwasm built from `zig-pkg`).
+   Include a `try_table` fixture so item 6 is settled by a check, not an opinion.
+2. Builtin inventory (~1,115 builtins: tier, corpus/core usage, portability).
+3. ADR: value layout, calling convention, depth counter, exceptions, ABI.
+4. Walking skeleton, run through the `test/clj` suites on all backends.
+
+Still unverified: Cloudflare Workers (size limit, WasmGC/tail-call/exception
+acceptance, runtime compilation). Two web searches timed out. Plan: run a small GC
+module under `wrangler dev` (workerd is V8) if `wrangler` is available, else the
+maintainer checks the limits.
+
+Proposed earlier, now superseded by the list above:
 - **Calling convention: Clojure calls are wasm calls on the engine stack** (option
   A), with a compiled-in depth counter raising a catchable `StackOverflowError`.
   Expected depth ~3-10k, i.e. ClojureScript parity, varying by engine and tier.
