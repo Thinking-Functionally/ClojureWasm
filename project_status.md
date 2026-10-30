@@ -288,10 +288,21 @@ Proposed, awaiting maintainer confirmation:
   locals, avoid spills). The wasm build may need a lower `depth` suite floor than
   5,000, declared through the manifest's capability flags. The calling convention is
   hard to change once the library is compiled against it, so confirm before the ADR.
-- **One emission pipeline**: an in-memory module with a binary encoder as the main
+- **One emission pipeline** (superseded below by the 2026-10-30 evening decision to
+  keep WAT -> `wasm-tools` -> wasm): an in-memory module with a binary encoder as the main
   path (no `wasm-tools` dependency), and `--emit-wat` as an optional dump of the
   same module for debugging. Check them against each other (`wasm-tools print` of
   our binary vs our WAT dump) and validate with an independent engine in CI. A
   walking skeleton may start with WAT text, but the encoder must exist before
   anything ships, so the shipped path is the tested path.
 - Where to start: builtin inventory + ADR first, then the walking skeleton.
+
+Decided 2026-10-30 (evening), replacing the earlier "binary encoder" proposal:
+- **One pipeline for development and production: generated WAT -> `wasm-tools
+  parse` -> `.wasm`**, as the current WasmGC backend already does. Development and
+  production share it, so the shipped path is the tested path. WAT stays available
+  for debugging with no extra code. Consequence to design for: `wasm-tools` becomes
+  a build-time dependency of `cljw build --target` (the produced `.wasm` needs
+  nothing), so either require it on `PATH` with a clear error, or bundle it. Per-form
+  spawning, as the in-process backend does today, is too slow for whole-program
+  builds: emit one module per build.
