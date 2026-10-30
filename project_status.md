@@ -264,9 +264,34 @@ after that are unknown.
 Open questions for the maintainer (unanswered when work paused):
 - Is `java.*` parity required, or a documented per-platform subset?
 - Full numeric tower from the first release, or longs/doubles first?
-- Must the artifact use real WasmGC values (this plan assumes yes)?
 - Server runtime(s) to support (wasmtime, WasmEdge, Wasmer, Node/Deno)?
 - Threads in the wasm build: synchronous `future`/`agent`/`pmap`, or concurrent?
 - How strict is the Cloudflare Workers size/startup budget?
-- Where to start: builtin inventory + ADR first, or close out this branch and open
-  the PR first (PR template at `.github/pull_request_template.md` must be used)?
+
+Decided in discussion, 2026-10-30:
+- **Wasm output is a `cljw build --target` mode**, not a separate compiler (see above).
+- **Real WasmGC values; no collector of our own.** zwasm, browsers and (per release
+  notes found by web search, not read directly) wasmtime from v47 provide the GC.
+  Still ours to do: struct/array layouts, identity hash codes (engines expose no
+  stable object identity), and a decision on weak references/finalizers.
+- **`clojure.core` is a library written in Clojure** on a few compiler intrinsics
+  (the ClojureScript approach), with tree-shaking so Workers size limits are met.
+  Acceptance: the corpus (collections must keep the JVM hash order) and `test/clj`.
+- **Behaviour baseline is JVM Clojure** (`--jvm`); depth is a fixed floor (above).
+
+Proposed, awaiting maintainer confirmation:
+- **Calling convention: Clojure calls are wasm calls on the engine stack** (option
+  A), with a compiled-in depth counter raising a catchable `StackOverflowError`.
+  Expected depth ~3-10k, i.e. ClojureScript parity, varying by engine and tier.
+  Rejected for now: a heap-allocated call stack (unbounded depth, but calls several
+  times slower by my estimate, unmeasured) and a hybrid. Keep frames small (reuse
+  locals, avoid spills). The wasm build may need a lower `depth` suite floor than
+  5,000, declared through the manifest's capability flags. The calling convention is
+  hard to change once the library is compiled against it, so confirm before the ADR.
+- **One emission pipeline**: an in-memory module with a binary encoder as the main
+  path (no `wasm-tools` dependency), and `--emit-wat` as an optional dump of the
+  same module for debugging. Check them against each other (`wasm-tools print` of
+  our binary vs our WAT dump) and validate with an independent engine in CI. A
+  walking skeleton may start with WAT text, but the encoder must exist before
+  anything ships, so the shipped path is the tested path.
+- Where to start: builtin inventory + ADR first, then the walking skeleton.
