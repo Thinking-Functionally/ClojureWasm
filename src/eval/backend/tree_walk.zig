@@ -1180,16 +1180,35 @@ const ArgsFrame = struct {
 
 fn evalCall(rt: *Runtime, env: *Env, locals: []Value, n: node_mod.CallNode) !Value {
     const callee = try eval(rt, env, locals, n.callee);
-    // Slot 0 carries the callee; args fill 1..; the frame publishes each.
-    var args_buf: [MAX_LOCALS + 1]Value = undefined;
     if (n.args.len > MAX_LOCALS)
         return error_catalog.raise(.call_args_exceed_max_locals, n.loc, .{ .got = n.args.len, .max = MAX_LOCALS });
+    // The argument buffers live on the native stack while the arguments (and
+    // the call itself) evaluate, so a recursive call pays them once per level.
+    // Size them to the call: worst-case buffers (256 args + 256 locations)
+    // were ~8 KB per call. Each variant is a separate non-inlined function so
+    // a small call never carries the large frame.
+    if (n.args.len <= 4) return evalCallSized(4, rt, env, locals, n, callee);
+    if (n.args.len <= 16) return evalCallSized(16, rt, env, locals, n, callee);
+    if (n.args.len <= 64) return evalCallSized(64, rt, env, locals, n, callee);
+    return evalCallSized(MAX_LOCALS, rt, env, locals, n, callee);
+}
+
+noinline fn evalCallSized(
+    comptime cap: usize,
+    rt: *Runtime,
+    env: *Env,
+    locals: []Value,
+    n: node_mod.CallNode,
+    callee: Value,
+) !Value {
+    // Slot 0 carries the callee; args fill 1..; the frame publishes each.
+    var args_buf: [cap + 1]Value = undefined;
     args_buf[0] = callee;
     var af: ArgsFrame = undefined;
     af.push(&args_buf);
     defer af.pop();
     af.publish(1);
-    var arg_locs: [MAX_LOCALS]SourceLocation = undefined;
+    var arg_locs: [cap]SourceLocation = undefined;
     for (n.args, 0..) |*a, i| {
         args_buf[1 + i] = try eval(rt, env, locals, a);
         af.publish(2 + i);
@@ -1386,16 +1405,24 @@ pub fn callFunctionBindingRest(rt: *Runtime, env: *Env, fn_val: Value, args: []c
 /// (the §9.2.S perf-parity work flattening `op_call`) reuses this exact
 /// binder rather than re-deriving the closure/arg/rest layout, so the two
 /// activation paths cannot drift.
+/// Slots a call frame needs: the analyzer's exact per-method high-water, never
+/// less than the arg region; sentinel 0 (no analyzer data) means the full
+/// MAX_LOCALS. Shared by `bindCallFrame` and the frame-size tier choice in
+/// `callMethodImpl` so the two cannot drift.
+fn frameSlotsFor(f: *const Function, m: *const FunctionMethod) usize {
+    const arg_region: usize = @as(usize, f.slot_base) + m.arity + @intFromBool(m.has_rest);
+    return if (m.frame_slots == 0) MAX_LOCALS else @max(@as(usize, m.frame_slots), arg_region);
+}
+
 pub fn bindCallFrame(
     rt: *Runtime,
     f: *const Function,
     m: *const FunctionMethod,
     args: []const Value,
-    locals: *[MAX_LOCALS]Value,
+    locals: []Value,
     rest_mode: RestMode,
     loc: SourceLocation,
 ) !usize {
-    const arg_region: usize = @as(usize, f.slot_base) + m.arity + @intFromBool(m.has_rest);
     // PERF: init + GC-root only the slots this method actually uses, not all 256
     // — cuts the ~2 KB per-call nil-init on the hottest path [refs: O-015]
     // ADR-0130 frame-rooting: m.frame_slots is the analyzer's exact per-method
@@ -1404,8 +1431,8 @@ pub fn bindCallFrame(
     // non-analyzer FnMethod) falls back to the full MAX_LOCALS. A too-low fs is a
     // GC UAF / slot_out_of_range (the O-005 failure modes) — locked by the
     // CLJW_GC_TORTURE `nested_deep` e2e.
-    const fs: usize = if (m.frame_slots == 0) MAX_LOCALS else @max(@as(usize, m.frame_slots), arg_region);
-    if (fs > MAX_LOCALS)
+    const fs: usize = frameSlotsFor(f, m);
+    if (fs > MAX_LOCALS or fs > locals.len)
         return error_catalog.raise(.fn_frame_exceeds_max_locals, loc, .{ .base = f.slot_base, .arity = m.arity, .max = MAX_LOCALS });
 
     @memset(locals[0..fs], .nil_val);
@@ -1447,7 +1474,28 @@ fn callMethodImpl(rt: *Runtime, env: *Env, fn_val: Value, args: []const Value, l
     const m: *const FunctionMethod = selectMethod(f, args.len) orelse {
         return raiseArityNotMatched(f, args.len, loc);
     };
+    // The activation's locals live on the native stack for the call's whole
+    // extent, so a recursive Clojure fn pays this frame once per level. Size
+    // it to the method (a 256-slot array cost ~2 KB per call even for a
+    // two-slot fn); the sized variants are separate non-inlined functions so
+    // a small call never carries the large frame.
+    const needed = frameSlotsFor(f, m);
+    if (needed <= 16) return callMethodSized(16, rt, env, fn_val, f, m, args, loc, rest_mode);
+    if (needed <= 64) return callMethodSized(64, rt, env, fn_val, f, m, args, loc, rest_mode);
+    return callMethodSized(MAX_LOCALS, rt, env, fn_val, f, m, args, loc, rest_mode);
+}
 
+noinline fn callMethodSized(
+    comptime cap: usize,
+    rt: *Runtime,
+    env: *Env,
+    fn_val: Value,
+    f: *Function,
+    m: *const FunctionMethod,
+    args: []const Value,
+    loc: SourceLocation,
+    rest_mode: RestMode,
+) !Value {
     // GC-ROOT: A6 — tree_walk fn activation roots its live slot window +
     // the EXECUTING callee for the call's whole extent (D-555; the sibling
     // of vm.eval's A1 frame). Without the window, a mid-eval auto-collect
@@ -1458,7 +1506,7 @@ fn callMethodImpl(rt: *Runtime, env: *Env, fn_val: Value, args: []const Value, l
     // a raw `*Function` (ADR-0184 A, DA gap 1) — the callee slot must
     // already be live then; the locals window starts empty and is widened
     // to the bound slots after the binder returns. [ref: .dev/gc_rooting.md §A]
-    var locals: [MAX_LOCALS]Value = undefined;
+    var locals: [cap]Value = undefined;
     var gc_stack: [1]Value = .{.nil_val};
     var gc_sp: u16 = 0;
     var gc_frame: root_set.EvalFrame = .{
