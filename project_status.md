@@ -167,7 +167,11 @@ All three backends now clear ClojureScript's ~9,700. Where the depth comes from:
   GC, TreeWalk and WasmGC).
 - **WasmGC** is bound by zwasm's interpreter loop (`dispatch.run`, a ~21 KB
   frame per wasm re-entry), not by cljw. Only direct wasm-to-wasm calls remove
-  it; that is part of the standalone compiler.
+  it; that is part of the standalone compiler. zwasm v2.8.1 was built and
+  measured (2026-10-30, local source, not adopted): direct recursion 15,200 ->
+  16,800 and through `map` 12,000 -> 13,200, about +10%, with the same
+  `max_frame_stack = 256` cap and native-stack recursion per call. Not worth a
+  dependency bump, so the pin stays at v2.7.0.
 
 Implications for the standalone compiler: a browser engine gives roughly
 10k wasm calls for a small frame and fewer for realistic ones, so
