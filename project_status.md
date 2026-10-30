@@ -191,6 +191,25 @@ native-stack backend or browser engine can match, so the gap is reported in the
 table above and deliberately not tested. Matching it would need an explicit
 heap-allocated call stack in every backend.
 
+**Engine-stack recursion on real engines (measured 2026-10-30, one machine).** A
+small wasm function that calls itself (3 params + 2 locals), and the same function
+also allocating one GC struct per call. Depth is the maximum before the engine's
+stack-overflow trap. GC structs, `return_call` (5,000,000-deep tail call) and
+exceptions-free recursion all ran on every engine below.
+
+| Engine | Plain frame | With a GC struct per call |
+|---|---|---|
+| V8 (Node 26; Chrome, Workers) | 10,377 | 10,200 |
+| JavaScriptCore (Bun) | 37,886 | 144,000 (varies with JIT tier) |
+| wasmtime 50.0.0, default stack | 32,400 | 8,100 |
+| wasmtime, `-W max-wasm-stack=64MiB` | 4,147,200 | not measured |
+| zwasm 2.7.0, JIT (what `auto` picks, also for the GC module) | 103,680 | 103,680 |
+| zwasm 2.7.0, interpreter | **250** (256-frame cap) | **250** |
+
+Not measured: Firefox/SpiderMonkey, Safari, Chrome itself, Cloudflare Workers.
+Depth is engine- and tier-dependent, so a program's depth is a per-platform
+property, not a number we can promise. Probes: `/tmp/plat/*.wat` (not kept).
+
 Implications for the wasm build target: a browser engine gives roughly
 10k wasm calls for a small frame and fewer for realistic ones, so
 ClojureScript-level depth is the ceiling there unless the design uses an
