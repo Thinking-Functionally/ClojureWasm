@@ -24,8 +24,33 @@ const margin: usize = 2 * 1024 * 1024;
 /// Stack of the thread that runs the program. Roughly 40x the old budget:
 /// ~28 KB of native stack per Clojure call on TreeWalk and ~37 KB on WasmGC
 /// gives ~19k and ~14k calls of direct recursion (ClojureScript on V8: ~10k).
-/// Only touched pages are committed.
-pub const main_stack_bytes: usize = 512 * 1024 * 1024;
+/// Only touched pages are committed, but a runaway recursion touches all of
+/// them, so this is also the peak extra memory of a stack overflow. Override
+/// with CLJW_STACK_MB (see `mainStackBytes`).
+pub const default_main_stack_bytes: usize = 512 * 1024 * 1024;
+
+/// Smallest and largest accepted CLJW_STACK_MB, in MiB. Below the minimum the
+/// default 6 MiB budget would apply anyway; the maximum guards against typos
+/// that would reserve absurd address space.
+const min_stack_mb: usize = 16;
+const max_stack_mb: usize = 4096;
+
+/// Main-thread stack size: CLJW_STACK_MB if it is a valid number in range,
+/// otherwise the default. An invalid value warns and is ignored.
+pub fn mainStackBytes() usize {
+    const z = std.c.getenv("CLJW_STACK_MB") orelse return default_main_stack_bytes;
+    return parseStackMb(std.mem.span(z)) orelse {
+        if (std.mem.span(z).len != 0)
+            std.debug.print("warning: ignoring CLJW_STACK_MB='{s}' (expected {d}..{d})\n", .{ std.mem.span(z), min_stack_mb, max_stack_mb });
+        return default_main_stack_bytes;
+    };
+}
+
+fn parseStackMb(v: []const u8) ?usize {
+    const mb = std.fmt.parseInt(usize, v, 10) catch return null;
+    if (mb < min_stack_mb or mb > max_stack_mb) return null;
+    return mb * 1024 * 1024;
+}
 
 /// Stack of future / agent / Thread workers (virtual reservation per thread).
 pub const worker_stack_bytes: usize = 128 * 1024 * 1024;
@@ -53,7 +78,18 @@ test "adoptStackSize keeps the default budget for small or unknown stacks" {
 test "adoptStackSize leaves head-room below a big stack" {
     const saved = budget;
     defer budget = saved;
-    adoptStackSize(main_stack_bytes);
-    try std.testing.expectEqual(main_stack_bytes - margin, budget);
+    adoptStackSize(default_main_stack_bytes);
+    try std.testing.expectEqual(default_main_stack_bytes - margin, budget);
     try std.testing.expect(budget > 40 * default_budget);
+}
+
+test "parseStackMb accepts in-range integers only" {
+    try std.testing.expectEqual(@as(?usize, 64 * 1024 * 1024), parseStackMb("64"));
+    try std.testing.expectEqual(@as(?usize, 16 * 1024 * 1024), parseStackMb("16"));
+    try std.testing.expectEqual(@as(?usize, 4096 * 1024 * 1024), parseStackMb("4096"));
+    try std.testing.expectEqual(@as(?usize, null), parseStackMb("15"));
+    try std.testing.expectEqual(@as(?usize, null), parseStackMb("4097"));
+    try std.testing.expectEqual(@as(?usize, null), parseStackMb("abc"));
+    try std.testing.expectEqual(@as(?usize, null), parseStackMb(""));
+    try std.testing.expectEqual(@as(?usize, null), parseStackMb("-5"));
 }

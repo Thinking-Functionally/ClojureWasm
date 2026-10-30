@@ -127,6 +127,37 @@ harness with the allow-list `test/wasmgc_known_failures.txt`).
 `cljw --compare` runs all three backends in-process (heap values and errors
 report MISMATCH there by design; use `check_backend_diff.sh` for semantics).
 
+## Recursion depth (measured 2026-10-29/30, ReleaseSafe, one machine)
+
+Direct recursion `(defn f [n] (if (zero? n) 0 (inc (f (dec n)))))`, maximum
+depth before `StackOverflowError`:
+
+| Platform | Depth |
+|---|---|
+| JVM Clojure (Java 25) | ~214,000 (through `map`: ~2.8k cold, ~7.7k warm) |
+| ClojureScript on Node/V8 | ~9,700 (through `map`: ~1,100) |
+| Raw wasm in V8, small frame | ~10,400 (frame with 14 extra locals: ~4,800; 30: ~3,000) |
+| Wasm calling back through a JS import | ~900 |
+| cljw TreeWalk | 225 before, **19,200** now |
+| cljw WasmGC | 168 before, **14,800** now |
+| cljw VM | 2,000 (its own `FRAMES_MAX`; unchanged, now the shallowest) |
+
+`src/runtime/stack_guard.zig` derives each thread's budget from its real stack:
+the program runs on a 512 MiB thread, workers get 128 MiB, anything else keeps
+6 MiB. `CLJW_STACK_MB` (16..4096) overrides the main stack. Memory is
+proportional to depth, not a leak: ~27 KB per call on TreeWalk (~35 KB WasmGC).
+Idle RSS is unchanged (14 MB); a runaway recursion fills the stack before the
+catchable overflow (TreeWalk 524 MB, WasmGC 760 MB at 512 MiB). Choose by
+container size: 64 MiB gives 2.4k / 1.8k deep and 76 MB peak; 128 MiB 4.8k /
+3.6k; 256 MiB 9.6k / 7.2k; 512 MiB (default) 19.2k / 14.8k.
+
+Implications for the standalone compiler: a browser engine gives roughly
+10k wasm calls for a small frame and fewer for realistic ones, so
+ClojureScript-level depth is the ceiling there unless the design uses an
+explicit heap-allocated call stack. A design that re-enters wasm through host
+imports (like the current hybrid) gets only ~900. Direct wasm-to-wasm calls are
+required, and frames must stay small.
+
 ## Direction (decided in discussion, not yet implemented)
 
 Deployment targets: browser, Cloudflare Workers, standalone server (WASI).

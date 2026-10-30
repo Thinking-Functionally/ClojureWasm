@@ -21,14 +21,15 @@ const error_render = @import("app/error_render.zig");
 const io_default = @import("runtime/concurrency/io_default.zig");
 const stack_guard = @import("runtime/stack_guard.zig");
 
-/// The program runs on a thread with `stack_guard.main_stack_bytes` of stack so
+/// The program runs on a thread with `stack_guard.mainStackBytes()` of stack so
 /// deep Clojure recursion has room (the OS main thread is fixed at ~8 MiB).
 const Main = struct {
     init: std.process.Init,
+    stack_bytes: usize,
     err: ?anyerror = null,
 
     fn run(self: *Main) void {
-        stack_guard.adoptStackSize(stack_guard.main_stack_bytes);
+        stack_guard.adoptStackSize(self.stack_bytes);
         cli.dispatch(self.init) catch |e| {
             self.err = e;
         };
@@ -45,8 +46,8 @@ pub fn main(init: std.process.Init) !void {
     // single-threaded default (a per-test threaded io is set where needed), so
     // `io_default` never dangles at a freed test-local `Threaded`.
     io_default.set(init.io);
-    var m: Main = .{ .init = init };
-    const t = std.Thread.spawn(stack_guard.spawnConfig(stack_guard.main_stack_bytes), Main.run, .{&m}) catch {
+    var m: Main = .{ .init = init, .stack_bytes = stack_guard.mainStackBytes() };
+    const t = std.Thread.spawn(stack_guard.spawnConfig(m.stack_bytes), Main.run, .{&m}) catch {
         // No room for the big stack (e.g. a tight address-space limit): run on
         // this thread with the default 6 MiB budget.
         return cli.dispatch(init);
